@@ -1,0 +1,67 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM
+xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# TeXの中間生成物
+Server/**/out/
+*.aux
+*.dvi
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.toc
+
+# 実行時ログ・データベース
+*.log
+*.pid
+*.db
+*.sqlite
+*.sqlite3
+Server/**/tmp/
+
+# 認証情報と端末固有の環境設定
+.env
+*.env
+!.env.example
+!*.env.example
+*.pem
+*.key
+*.p12
+
+# ユーザーが作成したNote Package
+*.lilypondnote/
+
+# 一時ファイル
+*.tmp
+*.swp
+*~

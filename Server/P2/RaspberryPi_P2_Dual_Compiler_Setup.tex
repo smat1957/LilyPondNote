@@ -1,0 +1,628 @@
+\documentclass[uplatex,a4paper,11pt]{jsarticle}
+\usepackage[margin=22mm]{geometry}
+\usepackage[dvipdfmx]{hyperref,xcolor}
+\usepackage{fvextra,enumitem,longtable,booktabs,amssymb}
+\usepackage{listings,jvlisting}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!65!black,
+  pdftitle={P2 TeX・LilyPond・移調サービス構築手順}}
+\DefineVerbatimEnvironment{command}{Verbatim}{fontsize=\small,frame=single,
+  rulecolor=\color{gray!55},breaklines=true,breakanywhere=true}
+\setlist{nosep}
+\lstset{language=Python,basicstyle=\ttfamily\scriptsize,numbers=left,
+  numberstyle=\tiny,frame=single,breaklines=true,columns=fullflexible,
+  keepspaces=true,showstringspaces=false,tabsize=4,captionpos=b}
+
+\title{P2 TeX・LilyPond・移調\\サービス構築手順}
+\author{}
+\date{2026年8月30日}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+本書は、同じP2上でTeX PDF生成、LilyPond PDF生成、LilyPond移調テキスト生成の
+3 APIを別プロセスとして構築し、
+P1からの内部トークン付き要求だけを受け付ける手順である。P2は利用者のパスワード、
+ユーザーDB、JWT署名鍵を保持せず、P0やクライアントから直接接続させない。
+\end{abstract}
+\tableofcontents
+\newpage
+
+\section{最初に理解する完成構成}
+
+\begin{command}
+P1 TeX認証API       -- token T --> P2 TeX API       TCP 8000
+P1 LilyPond認証API  -- token L --> P2 LilyPond PDF API       TCP 8001
+                         `-------> P2 LilyPond移調API         TCP 8002
+\end{command}
+
+内部トークンTとLは別の値である。LilyPondの二つのAPIは同じ内部トークンLを使う。
+P2のUFWとVLAN ACLはP1固定IPから3ポートへの通信だけ
+を許可する。P2の\texttt{/health}は認証不要のため、ファイアウォール境界の外へ公開しない。
+
+\section{前提値とディレクトリ}
+
+\begin{longtable}{@{}p{48mm}p{50mm}p{48mm}@{}}
+\toprule
+項目 & 例 & 用途\\
+\midrule
+P1固定IP & \texttt{192.168.30.10} & 接続を許可する唯一のホスト\\
+P2固定IP & \texttt{192.168.40.10} & コンパイルVLAN\\
+管理ネットワーク & \texttt{192.168.99.0/24} & SSH管理\\
+TeX API & \path{/opt/texnote/P2}, TCP 8000 & 5種類のTeXエンジン\\
+LilyPond PDF API & \path{/opt/lilypondnote/P2}, TCP 8001 & LilyPond PDF生成\\
+LilyPond移調API & \path{/opt/lilypond-transpose/P2}, TCP 8002 & 移調後テキスト生成\\
+\bottomrule
+\end{longtable}
+
+移調サービスの配置先は次で固定する。\texttt{engine}には
+LilyPond\_transposeリポジトリのPython実装だけを置き、Web APIラッパー、venv、エンジンを
+一つの専用ルート以下へ分離する。
+
+\begin{command}
+/opt/lilypond-transpose/P2/
+|-- transpose_app.py          HTTP APIラッパー
+|-- requirements-transpose.txt
+|-- .venv/                    移調API専用Python環境
+`-- engine/                   LilyPond_transposeの実処理
+    |-- main.py               CLIエントリポイント
+    |-- music_theory.py
+    |-- pitch.py
+    |-- relative.py
+    |-- tokenizer.py
+    |-- tokens.py
+    |-- transpose.py
+    `-- writer.py
+\end{command}
+
+systemdは\texttt{WorkingDirectory=/opt/lilypond-transpose/P2}から
+\texttt{transpose\_app:app}を起動し、ラッパーは
+\path{/opt/lilypond-transpose/P2/engine/main.py}を固定コマンドとして呼ぶ。利用者から実行
+ファイルのパスを指定させない。
+
+\section{OSとコンパイラを導入する}
+
+64-bit Raspberry Pi OS LiteまたはDebianを導入し、固定IPを設定する。
+
+\begin{command}
+sudo apt update
+sudo apt full-upgrade
+sudo apt install python3-venv python3-pip ufw \
+  texlive-latex-base texlive-latex-extra texlive-luatex \
+  texlive-xetex texlive-lang-japanese latexmk lilypond
+\end{command}
+
+必要な実行ファイルを確認する。
+
+\begin{command}
+for cmd in lualatex xelatex pdflatex uplatex platex dvipdfmx \
+  extractbb lilypond; do command -v "$cmd" || echo "MISSING: $cmd"; done
+lilypond --version
+\end{command}
+
+文書が追加フォントやTeXパッケージを使用する場合は、実際の入力で単体試験してから不足
+パッケージを追加する。サーバープロセスから\texttt{tlmgr}を実行させない。
+
+\section{専用ユーザーと配置先を作る}
+
+\begin{command}
+sudo useradd --system --home /opt/texnote/P2 \
+  --shell /usr/sbin/nologin texnote-p2
+sudo useradd --system --home /opt/lilypondnote/P2 \
+  --shell /usr/sbin/nologin lilypondnote-p2
+sudo useradd --system --home /opt/lilypond-transpose/P2 \
+  --shell /usr/sbin/nologin lilypond-transpose-p2
+sudo install -d -o texnote-p2 -g texnote-p2 /opt/texnote/P2
+sudo install -d -o lilypondnote-p2 -g lilypondnote-p2 /opt/lilypondnote/P2
+sudo install -d -o lilypond-transpose-p2 -g lilypond-transpose-p2 \
+  /opt/lilypond-transpose/P2
+\end{command}
+
+3サービスを別OSユーザーで動かす。PDF生成サービスの一時作業はPythonの一時ディレクトリ内
+で行われ、完了後に削除される。
+
+\section{TeX APIを配置する}
+
+管理用MacのTeXNoteリポジトリから転送する。
+
+\begin{command}
+# 管理用Macで実行
+scp Server/P2/progs/app.py Server/P2/progs/requirements.txt \
+  mat@192.168.40.10:/tmp/
+\end{command}
+
+P2で配置し、仮想環境を作る。
+
+\begin{command}
+sudo install -o texnote-p2 -g texnote-p2 -m 640 \
+  /tmp/app.py /tmp/requirements.txt /opt/texnote/P2/
+sudo -u texnote-p2 python3 -m venv /opt/texnote/P2/.venv
+sudo -u texnote-p2 /opt/texnote/P2/.venv/bin/pip install \
+  -r /opt/texnote/P2/requirements.txt
+sudo -u texnote-p2 /opt/texnote/P2/.venv/bin/python \
+  -m py_compile /opt/texnote/P2/app.py
+\end{command}
+
+\subsection{TeX側の必要ソース}
+
+ここで配置した二つのファイルが、P2のTeX PDF生成サービスに必要なPython側の全ファイルで
+ある。\texttt{requirements.txt}は\path{/opt/texnote/P2/.venv}だけに導入するPython
+パッケージを指定している。
+
+\lstinputlisting[caption={TeX PDF生成 app.py}]{/Users/mat/Documents/Git/TeXNote/Server/P2/progs/app.py}
+\lstinputlisting[language={},caption={TeX API専用 requirements.txt}]{/Users/mat/Documents/Git/TeXNote/Server/P2/progs/requirements.txt}
+
+\section{LilyPond APIを配置する}
+
+管理用MacのLilyPondNoteリポジトリから転送する。
+
+\begin{command}
+# 管理用Macで実行
+scp Server/P2/app.py Server/P2/requirements.txt \
+  mat@192.168.40.10:/tmp/
+\end{command}
+
+同名ファイルをTeX用とは別ディレクトリへ配置する。
+
+\begin{command}
+sudo install -o lilypondnote-p2 -g lilypondnote-p2 -m 640 \
+  /tmp/app.py /tmp/requirements.txt /opt/lilypondnote/P2/
+sudo -u lilypondnote-p2 python3 -m venv /opt/lilypondnote/P2/.venv
+sudo -u lilypondnote-p2 /opt/lilypondnote/P2/.venv/bin/pip install \
+  -r /opt/lilypondnote/P2/requirements.txt
+sudo -u lilypondnote-p2 /opt/lilypondnote/P2/.venv/bin/python \
+  -m py_compile /opt/lilypondnote/P2/app.py
+\end{command}
+
+\subsection{LilyPond PDF生成側の必要ソース}
+
+ここで配置した\texttt{app.py}はLilyPondを実行してPDFを返すAPIであり、後述する移調API
+とは別プロセスである。\texttt{requirements.txt}は
+\path{/opt/lilypondnote/P2/.venv}だけに導入する。
+
+\lstinputlisting[caption={LilyPond PDF生成 app.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P2/app.py}
+\lstinputlisting[language={},caption={LilyPond PDF生成API専用 requirements.txt}]{/Users/mat/Documents/Git/LilyPondNote/Server/P2/requirements.txt}
+
+\section{LilyPond移調テキストAPIを配置する}
+
+\subsection{CLIプログラムの転送}
+
+LilyPond\_transposeリポジトリの現行プログラムはWeb APIではない。
+\path{python/main.py}を\texttt{SRC DST}引数で実行すると、標準入力から楽譜テキストを読み、移調後テキストを
+標準出力へ返すCLIである。サンプル楽譜、生成済みPDF、シェルスクリプトはサーバー実行に
+不要なので転送しない。
+
+\begin{command}
+# 管理用MacでLilyPond_transposeリポジトリ直下から実行
+ssh mat@192.168.40.10 'mkdir -p /tmp/lilypond-transpose'
+scp python/main.py python/music_theory.py python/pitch.py \
+  python/relative.py python/tokenizer.py python/tokens.py \
+  python/transpose.py python/writer.py \
+  mat@192.168.40.10:/tmp/lilypond-transpose/
+\end{command}
+
+P2では\path{/opt/lilypond-transpose/P2/engine}へ配置する。このディレクトリを移調
+アルゴリズムの正式な運転場所とする。\path{/usr/local/bin}や管理ユーザーのホームへ置かない。
+
+\begin{command}
+sudo install -d -o lilypond-transpose-p2 -g lilypond-transpose-p2 \
+  /opt/lilypond-transpose/P2/engine
+sudo install -o lilypond-transpose-p2 -g lilypond-transpose-p2 -m 640 \
+  /tmp/lilypond-transpose/*.py /opt/lilypond-transpose/P2/engine/
+sudo -u lilypond-transpose-p2 python3 -m py_compile \
+  /opt/lilypond-transpose/P2/engine/*.py
+\end{command}
+
+代表的な入力でCLI単体試験を行う。
+
+\begin{command}
+sudo -u lilypond-transpose-p2 sh -c \
+  'printf "%s\n" "\\relative c'\'' { c4 d e f }" | \
+   python3 /opt/lilypond-transpose/P2/engine/main.py c a'
+\end{command}
+
+\subsection{移調CLI側の必要ファイル}
+
+次の8ファイルは、直前の手順で\path{/opt/lilypond-transpose/P2/engine}へ配置する
+移調エンジン一式である。\texttt{main.py}だけでは動作しないため、8ファイルを同じ
+ディレクトリへ配置する。サンプル楽譜、PDF、生成用シェルスクリプトはP2の運転には
+使用しないので掲載しない。8ファイルの内容は、本文の構築手順を中断しないよう
+付録「Python移調プログラムのソース」にまとめて掲載する。
+
+\subsection{APIラッパーの必須仕様}
+
+CLIをHTTP経由で安全に呼び出すため、LilyPondNoteリポジトリの
+\path{Server/P2/transpose_app.py}を使用する。API契約は次のとおりである。
+
+\begin{command}
+POST /v1/transpose
+Authorization: Bearer <LILYPONDNOTE_API_TOKEN>
+Content-Type: application/json
+
+request:
+{
+  "sourcePitch": "c",
+  "destinationPitch": "a",
+  "source": "LilyPond source text"
+}
+
+response:
+{
+  "transposedSource": "transposed LilyPond source text"
+}
+\end{command}
+
+このAPIは\textbf{LilyPondコマンドを実行せず、PDFを生成・返却しない}。内部では固定された
+Python実行ファイルと\texttt{main.py}を引数リストで起動し、\texttt{source}を標準入力へ
+渡す。シェル、リダイレクト文字列、ユーザー指定コマンドを実行してはならない。
+
+ラッパーには次の制限を実装する。
+
+\begin{itemize}
+  \item Pydanticで未知フィールドを拒否し、入力テキストを2,000,000文字以下にする。
+  \item 移調元・移調先音名をCLIが対応する値の許可リストで検証する。
+  \item subprocessへタイムアウト、CPU、メモリ、出力サイズの上限を設定する。
+  \item 終了コードが0でない場合はPDF生成APIと区別できるエラーとして返す。
+  \item ログ、例外、journalへ入力楽譜全文や内部トークンを出力しない。
+  \item 応答はUTF-8の\texttt{transposedSource}だけとし、\texttt{pdfBase64}を含めない。
+\end{itemize}
+
+ラッパー、専用requirements、完成済みsystemdファイル、env雛形はLilyPondNoteの
+\path{Server/P2}で一緒に管理する。管理用Macから転送し、専用venvへrequirementsに記載した
+FastAPIとUvicornだけを導入する。
+
+\begin{command}
+# 管理用MacでLilyPondNoteリポジトリ直下から実行
+scp Server/P2/transpose_app.py Server/P2/requirements-transpose.txt \
+  Server/P2/lilypond-transpose-p2.service \
+  Server/P2/lilypond-transpose-p2.env \
+  mat@192.168.40.10:/tmp/
+
+# P2で実行
+sudo install -o lilypond-transpose-p2 -g lilypond-transpose-p2 -m 640 \
+  /tmp/transpose_app.py /tmp/requirements-transpose.txt \
+  /opt/lilypond-transpose/P2/
+sudo -u lilypond-transpose-p2 python3 -m venv \
+  /opt/lilypond-transpose/P2/.venv
+sudo -u lilypond-transpose-p2 \
+  /opt/lilypond-transpose/P2/.venv/bin/pip install \
+  --requirement /opt/lilypond-transpose/P2/requirements-transpose.txt
+sudo -u lilypond-transpose-p2 \
+  /opt/lilypond-transpose/P2/.venv/bin/python -m py_compile \
+  /opt/lilypond-transpose/P2/transpose_app.py \
+  /opt/lilypond-transpose/P2/engine/*.py
+\end{command}
+
+\subsection{移調API側の必要ソース}
+
+\texttt{transpose\_app.py}はHTTP要求を検証し、直前に掲載した
+\texttt{engine/main.py}を固定コマンドとして呼び出すラッパーである。この専用venvに必要な
+外部Pythonパッケージは、次のrequirementsにあるFastAPIとUvicornだけである。
+
+\lstinputlisting[caption={移調テキストAPI transpose\_app.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P2/transpose_app.py}
+\lstinputlisting[language={},caption={移調API専用 requirements-transpose.txt}]{/Users/mat/Documents/Git/LilyPondNote/Server/P2/requirements-transpose.txt}
+
+\section{内部トークンを設定する}
+
+トークンはP1で生成した値を安全な経路でP2へ設定する。TeX用とLilyPond用を取り違えない。
+Mac側には次の3個のenv雛形がある。
+
+\begin{itemize}
+  \item TeX用：TeXNoteリポジトリの\path{Server/P2/p2.env}
+  \item LilyPond PDF用：LilyPondNoteリポジトリの
+        \path{Server/P2/lilypondnote-p2.env}
+  \item LilyPond移調用：LilyPondNoteリポジトリの
+        \path{Server/P2/lilypond-transpose-p2.env}
+\end{itemize}
+
+TeX用雛形で\texttt{TEXNOTE\_API\_TOKEN}の右辺にある山括弧内の仮の値は、P1の
+\path{/etc/texnote/p1.env}にある\texttt{TEXNOTE\_API\_TOKEN}と同じ値へ置き換える。
+LilyPond側二つの\texttt{<...>}は、P1の\path{/etc/lilypondnote/p1.env}にある
+\texttt{LILYPONDNOTE\_API\_TOKEN}と同じLトークンへ置き換える。TとLは別の値である。
+
+\begin{command}
+# /etc/texnote/p2.env
+TEXNOTE_API_TOKEN=<P1 TeX側と同じ内部トークンT>
+
+# /etc/lilypondnote/p2.env
+LILYPONDNOTE_API_TOKEN=<P1 LilyPond側と同じ内部トークンL>
+LILYPOND_EXECUTABLE=/usr/bin/lilypond
+
+# /etc/lilypond-transpose/p2.env
+LILYPONDNOTE_API_TOKEN=<P1 LilyPond側と同じ内部トークンL>
+LILYPOND_TRANSPOSE_MAIN=/opt/lilypond-transpose/P2/engine/main.py
+\end{command}
+
+次の完成形の雛形をMac側で編集する。秘密値の\texttt{<...>}だけを上記の対応するトークンへ
+置き換え、変数名、LilyPond実行ファイル、移調エンジンの配置先は変更しない。
+
+\lstinputlisting[language={},caption={TeX PDF生成用 p2.env雛形}]{/Users/mat/Documents/Git/TeXNote/Server/P2/p2.env}
+\lstinputlisting[language={},caption={LilyPond PDF生成用 p2.env雛形}]{/Users/mat/Documents/Git/LilyPondNote/Server/P2/lilypondnote-p2.env}
+\lstinputlisting[language={},caption={LilyPond移調用 p2.env雛形}]{/Users/mat/Documents/Git/LilyPondNote/Server/P2/lilypond-transpose-p2.env}
+
+\begin{command}
+# 管理用MacのTeXNoteリポジトリ直下で実行
+scp Server/P2/p2.env mat@192.168.40.10:/tmp/texnote-p2.env
+
+# 管理用MacのLilyPondNoteリポジトリ直下で実行
+scp Server/P2/lilypondnote-p2.env \
+  mat@192.168.40.10:/tmp/lilypondnote-p2.env
+scp Server/P2/lilypond-transpose-p2.env \
+  mat@192.168.40.10:/tmp/lilypond-transpose-p2.env
+
+# P2で実行：存在しない/etc配下を先に作る
+sudo install -d -o root -g texnote-p2 -m 750 /etc/texnote
+sudo install -o root -g texnote-p2 -m 640 \
+  /tmp/texnote-p2.env /etc/texnote/p2.env
+sudo install -d -o root -g lilypondnote-p2 -m 750 /etc/lilypondnote
+sudo install -o root -g lilypondnote-p2 -m 640 \
+  /tmp/lilypondnote-p2.env /etc/lilypondnote/p2.env
+sudo install -d -o root -g lilypond-transpose-p2 -m 750 \
+  /etc/lilypond-transpose
+sudo install -o root -g lilypond-transpose-p2 -m 640 \
+  /tmp/lilypond-transpose-p2.env /etc/lilypond-transpose/p2.env
+\end{command}
+
+配置後に、秘密値そのものを画面へ出さず、ファイルの所有者・権限と変数名だけを確認する。
+
+\begin{command}
+sudo stat -c '%U:%G %a %n' /etc/texnote/p2.env \
+  /etc/lilypondnote/p2.env /etc/lilypond-transpose/p2.env
+sudo sed -n 's/=.*$/=<設定済み>/p' /etc/texnote/p2.env \
+  /etc/lilypondnote/p2.env /etc/lilypond-transpose/p2.env
+\end{command}
+
+実機では次の結果になった。所有者が\texttt{root}、グループが各サービス専用グループ、
+権限が\texttt{640}であり、必要な変数名もすべて存在している。この結果は正常である。
+
+\begin{command}
+root:texnote-p2 640 /etc/texnote/p2.env
+root:lilypondnote-p2 640 /etc/lilypondnote/p2.env
+root:lilypond-transpose-p2 640 /etc/lilypond-transpose/p2.env
+
+TEXNOTE_API_TOKEN=<設定済み>
+LILYPONDNOTE_API_TOKEN=<設定済み>
+LILYPOND_EXECUTABLE=<設定済み>
+LILYPONDNOTE_API_TOKEN=<設定済み>
+LILYPOND_TRANSPOSE_MAIN=<設定済み>
+\end{command}
+
+ただし、上の\texttt{sed}は変数名の存在だけを確認するため、値が空、または山括弧付きの
+雛形のままでも\texttt{<設定済み>}と表示する。値を画面へ出さずに、空欄と未置換の雛形が
+ないことを次で確認する。
+
+\begin{command}
+sudo awk -F= '
+  /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+  NF < 2 || $2 == "" || $2 ~ /^<.*>$/ {
+    print FILENAME ": 未設定または雛形のまま: " $1
+    error=1
+  }
+  END {
+    if (!error) print "すべての値が設定済みです"
+    exit error
+  }
+' /etc/texnote/p2.env \
+  /etc/lilypondnote/p2.env \
+  /etc/lilypond-transpose/p2.env
+\end{command}
+
+正常なら\texttt{すべての値が設定済みです}の1行だけが表示される。ファイル名と変数名が
+表示された場合は、そのファイルの該当値をMac側の雛形で修正し、再転送・再配置する。
+
+P2にP1のJWT署名鍵を置かない。P2は利用者JWTではなくP1--P2間の固定トークンだけを検証する。
+
+\section{systemdで3サービスを起動する}
+
+\subsection{TeXコンパイルサービス}
+
+TeXNoteリポジトリにある完成済み\path{Server/P2/texnote-p2.service}を使用する。主要行を
+P2上で手入力せず、ファイル全体を転送して
+\path{/etc/systemd/system/texnote-p2.service}へ配置する。
+
+\begin{command}
+# 管理用MacのTeXNoteリポジトリ直下で実行
+scp Server/P2/texnote-p2.service mat@192.168.40.10:/tmp/
+
+# P2で実行
+sudo install -o root -g root -m 644 /tmp/texnote-p2.service \
+  /etc/systemd/system/texnote-p2.service
+\end{command}
+
+\lstinputlisting[language={},caption={TeX PDF生成systemdサービス}]{/Users/mat/Documents/Git/TeXNote/Server/P2/texnote-p2.service}
+
+\subsection{LilyPondコンパイルサービス}
+
+リポジトリの完成済み\path{lilypondnote-p2.service}を転送し、固定IPのTCP 8001で
+待ち受ける。
+
+\begin{command}
+# 管理用MacのLilyPondNoteリポジトリ直下で実行
+scp Server/P2/lilypondnote-p2.service mat@192.168.40.10:/tmp/
+
+# P2で実行
+sudo install -o root -g root -m 644 /tmp/lilypondnote-p2.service \
+  /etc/systemd/system/lilypondnote-p2.service
+\end{command}
+
+\lstinputlisting[language={},caption={LilyPond PDF生成systemdサービス}]{/Users/mat/Documents/Git/LilyPondNote/Server/P2/lilypondnote-p2.service}
+
+\subsection{LilyPond移調テキストサービス}
+
+完成済みファイルをMac側から転送する。主要行を手入力せず、リポジトリにある設定全体を
+\path{/etc/systemd/system/lilypond-transpose-p2.service}へ配置する。
+
+\begin{command}
+# 管理用MacのLilyPondNoteリポジトリ直下で実行
+scp Server/P2/lilypond-transpose-p2.service \
+  mat@192.168.40.10:/tmp/
+
+# P2で実行
+sudo install -o root -g root -m 644 \
+  /tmp/lilypond-transpose-p2.service \
+  /etc/systemd/system/lilypond-transpose-p2.service
+\end{command}
+
+\lstinputlisting[language={},caption={移調テキストsystemdサービス}]{/Users/mat/Documents/Git/LilyPondNote/Server/P2/lilypond-transpose-p2.service}
+
+起動する。
+
+\begin{command}
+sudo systemctl daemon-reload
+sudo systemctl enable --now texnote-p2.service
+sudo systemctl enable --now lilypondnote-p2.service
+sudo systemctl enable --now lilypond-transpose-p2.service
+systemctl status texnote-p2.service --no-pager -l
+systemctl status lilypondnote-p2.service --no-pager -l
+systemctl status lilypond-transpose-p2.service --no-pager -l
+sudo ss -ltnp | grep -E ':8000|:8001|:8002'
+\end{command}
+
+\subsection{envを読み込んで起動できることを確認する}
+
+3サービスの定義とenvを配置した後に一度再起動し、envのファイル名、権限、変数名、値が
+サービスから利用できることを確認する。
+
+\begin{command}
+sudo systemctl restart texnote-p2.service
+sudo systemctl restart lilypondnote-p2.service
+sudo systemctl restart lilypond-transpose-p2.service
+
+systemctl status texnote-p2.service --no-pager -l
+systemctl status lilypondnote-p2.service --no-pager -l
+systemctl status lilypond-transpose-p2.service --no-pager -l
+\end{command}
+
+3個とも\texttt{Active: active (running)}であれば、envを読み込んでプロセスを起動できて
+いる。失敗したサービスは、\texttt{journalctl -u サービス名 -n 100 --no-pager}で原因を
+確認する。なお、ここで確認できるのはenvを読み込んで起動できたことまでである。P1とP2の
+トークンが同じ値かは、第11章の正常要求と、トークンなし・取り違え要求の試験で確認する。
+
+\section{P2のUFWを設定する}
+
+SSHとP1からの3サービス経路だけを許可する。
+
+\begin{command}
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow from 192.168.99.0/24 to any port 22 proto tcp \
+  comment 'SSH from management network'
+sudo ufw allow from 192.168.30.10 to any port 8000 proto tcp \
+  comment 'P1 to TeX compiler'
+sudo ufw allow from 192.168.30.10 to any port 8001 proto tcp \
+  comment 'P1 to LilyPond compiler'
+sudo ufw allow from 192.168.30.10 to any port 8002 proto tcp \
+  comment 'P1 to LilyPond transpose'
+sudo ufw show added
+sudo ufw enable
+sudo ufw status verbose
+\end{command}
+
+別ターミナルからSSHを再接続する。P0、一般LAN、インターネットから8000、8001、8002へ到達
+できてはならない。VLAN ACLでも同じ制限を設定し、P2からP0、管理VLAN、家庭内LANへの
+新規接続を拒否する。OS更新用DNS、NTP、HTTPSだけを必要に応じて許可する。
+
+\section{P2内とP1から試験する}
+
+P2自身からヘルスチェックする。
+
+\begin{command}
+curl -sS http://192.168.40.10:8000/health
+curl -sS http://192.168.40.10:8001/health
+curl -sS http://192.168.40.10:8002/health
+\end{command}
+
+移調APIは\texttt{"status":"ok"}かつ\texttt{"transposeProgram":true}を返すことを確認する。
+HTTP 200でも\texttt{unavailable}または\texttt{false}なら、envの
+\texttt{LILYPOND\_TRANSPOSE\_MAIN}と\path{/opt/lilypond-transpose/P2/engine/main.py}の
+存在・権限が一致していない。
+
+内部トークンなしの処理要求が401になることを確認する。
+
+\begin{command}
+curl -i -X POST http://192.168.40.10:8000/v1/typeset \
+  -H 'Content-Type: application/json' -d '{}'
+curl -i -X POST http://192.168.40.10:8001/v1/typeset \
+  -H 'Content-Type: application/json' -d '{}'
+curl -i -X POST http://192.168.40.10:8002/v1/transpose \
+  -H 'Content-Type: application/json' -d '{}'
+\end{command}
+
+次にP1の各認証API経由でTeX PDF、LilyPond PDF、LilyPond移調テキストを生成する。
+移調応答に\texttt{transposedSource}があり、\texttt{pdfBase64}がないことを確認する。
+P1ログとP2ログを同時に確認する。
+
+\begin{command}
+journalctl -u texnote-p2.service -f
+journalctl -u lilypondnote-p2.service -f
+journalctl -u lilypond-transpose-p2.service -f
+\end{command}
+
+内部トークンTをLilyPondへ、トークンLをTeXへ送った場合に401となることも確認する。
+
+\section{資源分離と運用上の注意}
+
+3 APIはプロセス内で同時実行数、CPU時間、仮想メモリ、出力サイズを制限し、
+同じP2のCPUとメモリを共有する。メモリ不足や過負荷が起きる場合はsystemdへ
+\texttt{MemoryMax}、\texttt{CPUQuota}、\texttt{TasksMax}を追加し、実機のRAM容量と
+代表的な文書で値を決める。一律に小さな値を設定すると正常なコンパイルも失敗する。
+
+ログに文書本文、パスワード、トークンを出力しない。更新時は一つずつ再起動し、他の
+サービスに影響がないことを確認する。
+
+\begin{command}
+sudo systemctl restart texnote-p2.service
+sudo systemctl restart lilypondnote-p2.service
+sudo systemctl restart lilypond-transpose-p2.service
+journalctl -u texnote-p2.service -n 100 --no-pager
+journalctl -u lilypondnote-p2.service -n 100 --no-pager
+journalctl -u lilypond-transpose-p2.service -n 100 --no-pager
+\end{command}
+
+\section{完了チェックリスト}
+
+\begin{itemize}
+  \item[$\square$] TeXはTCP 8000、LilyPond PDFは8001、移調テキストは8002で動く。
+  \item[$\square$] 3サービスは別OSユーザー、別仮想環境、別環境ファイルを使う。
+  \item[$\square$] TeXとLilyPondの内部トークンが異なる。
+  \item[$\square$] P2にユーザーDB、パスワード、JWT署名鍵がない。
+  \item[$\square$] P1からだけP2の8000、8001、8002へ接続できる。
+  \item[$\square$] P0と一般LANからP2へ直接接続できない。
+  \item[$\square$] トークンなし・取り違えた要求は401になる。
+  \item[$\square$] PDF APIはPDF、移調APIはテキストだけを返す。
+  \item[$\square$] 移調APIはLilyPond実行やPDF生成を行わない。
+  \item[$\square$] P2再起動後に3サービスとUFWが自動復旧する。
+\end{itemize}
+
+\clearpage
+\appendix
+\section{Python移調プログラムのソース}
+
+ここには、\path{/opt/lilypond-transpose/P2/engine}へ配置するPython移調エンジン8ファイル
+だけを掲載する。HTTP APIラッパー、requirements、env、systemdは、使用する手順と対応が
+分かるよう本文の各箇所に掲載している。
+
+\subsection{main.py}
+\lstinputlisting[caption={移調CLIの入口 main.py}]{/Users/mat/Documents/Git/LilyPond_transpose/python/main.py}
+
+\subsection{music\_theory.py}
+\lstinputlisting[caption={音楽理論処理 music\_theory.py}]{/Users/mat/Documents/Git/LilyPond_transpose/python/music_theory.py}
+
+\subsection{pitch.py}
+\lstinputlisting[caption={音高処理 pitch.py}]{/Users/mat/Documents/Git/LilyPond_transpose/python/pitch.py}
+
+\subsection{relative.py}
+\lstinputlisting[caption={relative記法処理 relative.py}]{/Users/mat/Documents/Git/LilyPond_transpose/python/relative.py}
+
+\subsection{tokenizer.py}
+\lstinputlisting[caption={字句解析 tokenizer.py}]{/Users/mat/Documents/Git/LilyPond_transpose/python/tokenizer.py}
+
+\subsection{tokens.py}
+\lstinputlisting[caption={トークン定義 tokens.py}]{/Users/mat/Documents/Git/LilyPond_transpose/python/tokens.py}
+
+\subsection{transpose.py}
+\lstinputlisting[caption={移調処理 transpose.py}]{/Users/mat/Documents/Git/LilyPond_transpose/python/transpose.py}
+
+\subsection{writer.py}
+\lstinputlisting[caption={LilyPondテキスト出力 writer.py}]{/Users/mat/Documents/Git/LilyPond_transpose/python/writer.py}
+
+\end{document}

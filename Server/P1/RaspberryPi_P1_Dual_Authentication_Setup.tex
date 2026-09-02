@@ -1,0 +1,1144 @@
+\documentclass[uplatex,a4paper,11pt]{jsarticle}
+\usepackage[margin=22mm]{geometry}
+\usepackage[dvipdfmx]{hyperref,xcolor}
+\usepackage{fvextra,enumitem,longtable,booktabs,amssymb}
+\usepackage{listings,jvlisting}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!65!black,
+  pdftitle={P1 TeXNote・LilyPondNote認証サーバー構築手順}}
+\DefineVerbatimEnvironment{command}{Verbatim}{fontsize=\small,frame=single,
+  rulecolor=\color{gray!55},breaklines=true,breakanywhere=true}
+\setlist{nosep}
+\lstset{language=Python,basicstyle=\ttfamily\scriptsize,numbers=left,
+  numberstyle=\tiny,frame=single,breaklines=true,columns=fullflexible,
+  keepspaces=true,showstringspaces=false,tabsize=4,captionpos=b}
+
+\title{P1 TeXNote・LilyPondNote\\認証サーバー構築手順\\
+\large DB・venv・ソースの対応が分かる完成構成版}
+\author{}
+\date{2026年8月31日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本書は、P1にTeXNote認証サービスとLilyPondNote認証サービスを最初から完成形で構築する
+手順である。LilyPondNoteの\texttt{main.py}にはPDF生成用\texttt{/compile}と移調
+テキスト生成用\texttt{/transpose}と、Free・Standard・Proの契約プラン制があらかじめ
+実装されている。本書ではこの完成構成を新規に構築する。二つのDB、二つのvenv、requirements、配置する
+ソースの対応関係を先に説明してから、実際の構築手順を示す。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{最初に理解する完成構成}
+
+\subsection{P1には二つの独立した認証サービスがある}
+
+\begin{command}
+P0
+ |-- tex.example.com      -> P1 TeX認証API       TCP 8000
+ |                            DB: /opt/texnote/P1/tex_service.db
+ |                            venv: /opt/texnote/P1/.venv
+ |
+ `-- lilypond.example.com -> P1 LilyPond認証API  TCP 8001
+                              DB: /opt/lilypondnote/P1/lilypondnote.db
+                              venv: /opt/lilypondnote/P1/.venv
+                              |-- /compile   -> P2:8001 PDF生成
+                              `-- /transpose -> P2:8002 移調テキスト生成
+\end{command}
+
+P1はP0の機能を持たない。Nginx、TLS証明書、インターネットからのポート転送をP1へ
+設定しない。
+
+\subsection{何と何が別なのか}
+
+\begin{longtable}{@{}p{40mm}p{51mm}p{55mm}@{}}
+\toprule
+項目 & TeXNote & LilyPondNote\\
+\midrule
+OSユーザー & \texttt{texnote-p1} & \texttt{lilypondnote-p1}\\
+Python venv & \path{/opt/texnote/P1/.venv} & \path{/opt/lilypondnote/P1/.venv}\\
+SQLite DB & \texttt{tex\_service.db} & \texttt{lilypondnote.db}\\
+JWT署名鍵 & TeX専用 & LilyPond専用\\
+P2内部トークン & TeX専用 & LilyPondの2処理で共用\\
+P1待受 & TCP 8000 & TCP 8001\\
+\bottomrule
+\end{longtable}
+
+したがって、\textbf{TeXNoteとLilyPondNoteは別DB}である。同じ人が両方を利用する場合は、
+両DBへそれぞれ利用者を登録する。
+
+一方、LilyPondのPDF生成と移調テキスト生成は別DBではない。\textbf{一つの
+\texttt{lilypondnote.db}、一つの利用者アカウント、一つのJWT、一つの契約プランと月間上限を共有}
+する。どちらを利用したかは、同じ\texttt{usage}テーブルの\texttt{service}列へ
+\texttt{typeset}または\texttt{transpose}と記録する。
+
+LilyPondNoteアプリの移調設定には「ローカル」と「リモート」がある。ローカル移調は端末内で
+完結してP1へ要求を送らないため、利用回数へ加算されない。リモート移調だけが
+\texttt{/transpose}を通り、成功・失敗を含む1要求として月間合計と移調内訳へ記録される。
+
+\section{二つのDB構造}
+
+\subsection{TeXNote DB}
+
+保存先は\path{/opt/texnote/P1/tex_service.db}である。
+
+\begin{longtable}{@{}p{28mm}p{46mm}p{72mm}@{}}
+\toprule
+テーブル & 主な列 & 用途\\
+\midrule
+\texttt{users} & id, email, password\_hash, status, plan & TeX利用者、状態、契約プラン\\
+\texttt{usage} & user\_id, created\_at, compile\_seconds, input\_bytes, success & TeXコンパイル履歴\\
+\texttt{api\_keys} & user\_id, key\_hash, revoked\_at & 将来のAPIキー管理用\\
+\bottomrule
+\end{longtable}
+
+TeX側の\texttt{usage}にLilyPondの履歴は入らない。
+
+\subsection{LilyPondNote DB}
+
+保存先は\path{/opt/lilypondnote/P1/lilypondnote.db}である。
+
+\begin{longtable}{@{}p{28mm}p{49mm}p{69mm}@{}}
+\toprule
+テーブル & 列 & 用途\\
+\midrule
+\texttt{users} & id, email, password\_hash, status, plan & LilyPond利用者、状態、契約プラン\\
+\texttt{usage} & id, user\_id, created\_at, compile\_seconds, input\_bytes, success, service & PDF生成・移調の共通履歴\\
+\bottomrule
+\end{longtable}
+
+契約プランと月間上限は\texttt{plans.py}の一箇所で次のように定義する。PDF生成とリモート
+移調は、この同じ上限を消費する。
+
+\begin{longtable}{@{}p{45mm}p{55mm}@{}}
+\toprule
+プラン & 月間要求回数\\
+\midrule
+\texttt{free} & 50回\\
+\texttt{standard} & 1,000回\\
+\texttt{pro} & 5,000回\\
+\bottomrule
+\end{longtable}
+
+\texttt{usage.service}の値は次の二つだけである。
+
+\begin{longtable}{@{}p{35mm}p{105mm}@{}}
+\toprule
+値 & 意味\\
+\midrule
+\texttt{typeset} & \texttt{/compile}を使い、P2のLilyPondでPDFを生成した\\
+\texttt{transpose} & \texttt{/transpose}を使い、P2で移調後テキストを生成した。PDFは生成しない\\
+\bottomrule
+\end{longtable}
+
+新しいLilyPondNote DBを完成形で作成するソースをここに示す。
+
+\lstinputlisting[caption={LilyPondNote DB作成・接続 database.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/database.py}
+
+\section{OSパッケージとPythonパッケージの違い}
+
+\subsection{aptで入れるもの}
+
+aptはOS全体で使うPython本体、venv作成機能、SQLite確認コマンド、UFWを導入する。
+
+\begin{command}
+sudo apt update
+sudo apt full-upgrade
+sudo apt install python3 python3-venv python3-pip sqlite3 ufw
+\end{command}
+
+P1ではTeXやLilyPondを実行しないため、TeX LiveとLilyPond本体は導入しない。それらはP2へ
+導入する。
+
+\subsection{pipとrequirementsの役割}
+
+pipは各venvの中だけへPythonライブラリを導入する。本書ではvenvを混用しないため、
+requirementsも二つの明示的なファイルに分ける。さらに、各requirementsは、そのサービスの
+ソースと同じリポジトリで管理する。したがってTeX用ファイルをLilyPondNoteリポジトリへ
+置いてはならない。
+
+\begin{longtable}{@{}p{48mm}p{48mm}p{48mm}@{}}
+\toprule
+requirements & 導入先venv & 用途\\
+\midrule
+TeXNoteリポジトリ\\\texttt{Server/P1/}\\\texttt{requirements-texnote.txt} & \path{/opt/texnote/P1/.venv} & TeX認証・JWT・P2中継\\
+LilyPondNoteリポジトリ\\\texttt{Server/P1/}\\\texttt{requirements-}\\\texttt{lilypondnote.txt} & \path{/opt/lilypondnote/P1/.venv} & LilyPond認証・PDF中継・移調中継\\
+\bottomrule
+\end{longtable}
+
+現在は両サービスが同じWeb技術を使うため内容は同じだが、venvは独立している。将来片方の
+バージョンだけを変更できるよう、ファイルも分けて管理する。
+
+\begin{longtable}{@{}p{35mm}p{105mm}@{}}
+\toprule
+パッケージ & 必要な理由\\
+\midrule
+FastAPI & HTTP APIと入力検査\\
+Uvicorn & FastAPIを常時待受させるASGIサーバー\\
+PyJWT & JWTの発行と検証\\
+argon2-cffi & パスワードのArgon2ハッシュと照合\\
+requests & P1からP2へ内部HTTP要求を送る\\
+\bottomrule
+\end{longtable}
+
+標準ライブラリの\texttt{sqlite3}、\texttt{os}、\texttt{time}等をpipで入れてはならない。
+multipart/form-dataを使わないため\texttt{python-multipart}も不要である。現在のソースに
+対して、次のrequirementsが必要十分である。
+
+\lstinputlisting[language={},caption={TeXNote P1 requirements}]{/Users/mat/Documents/Git/TeXNote/Server/P1/requirements-texnote.txt}
+
+\lstinputlisting[language={},caption={LilyPondNote P1 requirements}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/requirements-lilypondnote.txt}
+
+\section{専用ユーザーと配置先を作る}
+
+\begin{command}
+sudo useradd --system --home /opt/texnote/P1 \
+  --shell /usr/sbin/nologin texnote-p1
+sudo useradd --system --home /opt/lilypondnote/P1 \
+  --shell /usr/sbin/nologin lilypondnote-p1
+sudo install -d -o texnote-p1 -g texnote-p1 /opt/texnote/P1
+sudo install -d -o lilypondnote-p1 -g lilypondnote-p1 /opt/lilypondnote/P1
+\end{command}
+
+\section{TeXNote認証サービスを構築する}
+
+\subsection{必要なソースだけを配置する}
+
+運転に必要な\texttt{main.py}、\texttt{auth.py}、\texttt{database.py}、
+\texttt{plans.py}と、初期構築に必要な\texttt{tools/init\_db.py}、
+\texttt{tools/useradd.py}、日常運用で使う\texttt{tools/check02.py}、
+\texttt{tools/change\_plan.py}、\texttt{tools/reset\_password.py}を配置する。利用者の登録・確認・契約変更方法は、文書末尾の
+「日常運用手続き」でまとめて説明する。
+
+\begin{command}
+# 管理用MacのTeXNoteリポジトリ直下で実行
+scp Server/P1/progs/main.py Server/P1/progs/auth.py \
+  Server/P1/progs/database.py Server/P1/progs/plans.py \
+  mat@192.168.30.10:/tmp/
+scp Server/P1/progs/tools/init_db.py Server/P1/progs/tools/useradd.py \
+  Server/P1/progs/tools/check02.py Server/P1/progs/tools/change_plan.py \
+  Server/P1/progs/tools/reset_password.py \
+  mat@192.168.30.10:/tmp/
+
+# P1で実行
+sudo install -o texnote-p1 -g texnote-p1 -m 640 \
+  /tmp/main.py /tmp/auth.py /tmp/database.py /tmp/plans.py \
+  /opt/texnote/P1/
+sudo install -d -o texnote-p1 -g texnote-p1 /opt/texnote/P1/tools
+sudo install -o texnote-p1 -g texnote-p1 -m 640 \
+  /tmp/init_db.py /tmp/useradd.py /tmp/check02.py /tmp/change_plan.py \
+  /tmp/reset_password.py \
+  /opt/texnote/P1/tools/
+sudo -u texnote-p1 touch /opt/texnote/P1/tools/__init__.py
+\end{command}
+
+\subsection{TeX用venvを作る}
+
+\begin{command}
+# 管理用MacのTeXNoteリポジトリ直下で実行
+scp Server/P1/requirements-texnote.txt mat@192.168.30.10:/tmp/
+
+# P1で実行
+sudo -u texnote-p1 python3 -m venv /opt/texnote/P1/.venv
+sudo -u texnote-p1 /opt/texnote/P1/.venv/bin/pip install \
+  --requirement /tmp/requirements-texnote.txt
+sudo -u texnote-p1 /opt/texnote/P1/.venv/bin/python \
+  -m py_compile /opt/texnote/P1/*.py /opt/texnote/P1/tools/*.py
+sudo -u texnote-p1 sh -c \
+  'cd /opt/texnote/P1 && .venv/bin/python -m tools.init_db'
+\end{command}
+
+利用者は初期構築中に仮登録せず、疎通試験の直前に「日常運用手続き」の登録手順で作成する。
+
+\subsection{TeX側の必要ソース}
+
+\lstinputlisting[caption={TeX認証・P2中継 main.py}]{/Users/mat/Documents/Git/TeXNote/Server/P1/progs/main.py}
+\lstinputlisting[caption={TeXパスワード認証 auth.py}]{/Users/mat/Documents/Git/TeXNote/Server/P1/progs/auth.py}
+\lstinputlisting[caption={TeX DB接続 database.py}]{/Users/mat/Documents/Git/TeXNote/Server/P1/progs/database.py}
+\lstinputlisting[caption={TeXプラン定義 plans.py}]{/Users/mat/Documents/Git/TeXNote/Server/P1/progs/plans.py}
+\lstinputlisting[caption={TeX DB初期化 tools/init\_db.py}]{/Users/mat/Documents/Git/TeXNote/Server/P1/progs/tools/init_db.py}
+
+\section{LilyPondNote認証サービスを構築する}
+
+\subsection{完成済みソースを最初から配置する}
+
+ここで配置する\texttt{main.py}には、すでに次が実装されている。
+
+\begin{itemize}
+  \item \texttt{POST /login}：パスワード認証とJWT発行
+  \item \texttt{GET /me}：契約プラン、上限、合計利用回数と\texttt{typeset}/\texttt{transpose}内訳
+  \item \texttt{POST /compile}：P2 PDF APIへ中継し\texttt{typeset}履歴を記録
+  \item \texttt{POST /transpose}：P2移調APIへ中継し\texttt{transpose}履歴を記録
+  \item Free・Standard・Proの月間上限を、PDF生成とリモート移調の合計へ適用
+\end{itemize}
+
+ログインJSONには、次のサービス識別を必ず含める。
+
+\begin{command}
+TeXNote:       "service": "texnote"
+LilyPondNote:  "service": "lilypondnote"
+\end{command}
+
+発行するJWTの\texttt{aud}にも同じサービス名を入れ、以後の\texttt{/me}、
+\texttt{/compile}、\texttt{/transpose}で対象サービスの\texttt{aud}だけを受理する。
+さらに\texttt{/me}は\texttt{service}を返す。この三段階により、P0のポート番号を
+取り違えたクライアントが別サービスのDBでログインすることを防止する。
+ここで掲載・配置する\texttt{main.py}が、認証、サービス識別、PDF生成中継、移調中継を
+すべて備えた初期構築用の完成ソースである。
+
+\begin{command}
+# 管理用MacのLilyPondNoteリポジトリ直下で実行
+scp Server/P1/main.py Server/P1/database.py Server/P1/plans.py \
+  Server/P1/useradd.py Server/P1/change_plan.py Server/P1/reset_password.py \
+  Server/P1/requirements-lilypondnote.txt \
+  mat@192.168.30.10:/tmp/
+
+# P1で実行
+sudo install -o lilypondnote-p1 -g lilypondnote-p1 -m 640 \
+  /tmp/main.py /tmp/database.py /tmp/plans.py /tmp/useradd.py \
+  /tmp/change_plan.py /tmp/reset_password.py \
+  /opt/lilypondnote/P1/
+\end{command}
+
+\subsection{LilyPond用venvを作る}
+
+\begin{command}
+sudo -u lilypondnote-p1 python3 -m venv /opt/lilypondnote/P1/.venv
+sudo -u lilypondnote-p1 /opt/lilypondnote/P1/.venv/bin/pip install \
+  --requirement /tmp/requirements-lilypondnote.txt
+sudo -u lilypondnote-p1 /opt/lilypondnote/P1/.venv/bin/python \
+  -m py_compile /opt/lilypondnote/P1/*.py
+\end{command}
+
+利用者を登録せず、まずDBと二つのテーブルだけを完成形で作成する。
+
+\begin{command}
+sudo -u lilypondnote-p1 sh -c \
+  'cd /opt/lilypondnote/P1 && .venv/bin/python -c "from database import initialize; initialize()"'
+sudo -u lilypondnote-p1 sqlite3 /opt/lilypondnote/P1/lilypondnote.db \
+  '.schema'
+\end{command}
+
+\subsection{LilyPond側の必要ソース}
+
+運転、初期登録、日常の契約変更に使う完成ソースを次に示す。
+
+\lstinputlisting[caption={完成済みLilyPond認証・PDF/移調中継 main.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/main.py}
+\lstinputlisting[caption={LilyPond DB作成・接続 database.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/database.py}
+\lstinputlisting[caption={LilyPondプラン定義 plans.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/plans.py}
+\lstinputlisting[caption={LilyPond利用者登録 useradd.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/useradd.py}
+\lstinputlisting[caption={LilyPond契約プラン変更 change\_plan.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/change_plan.py}
+
+\section{秘密値とP2接続先}
+
+ここでは4個の異なるランダム値を作る。同じ値を使い回してはならない。それぞれの役割は
+次のとおりである。
+
+\begin{enumerate}
+  \item \textbf{TeX用JWT署名鍵}：P1のTeX認証APIが、利用者へ発行するJWTへ署名し、
+        後の要求でJWTが改変されていないことを確認する秘密鍵。
+  \item \textbf{TeX用P2内部トークン}：P1のTeX認証APIからP2のTeX処理APIを呼ぶとき、
+        正規のP1から来た内部要求であることをP2が確認するための共有トークン。
+  \item \textbf{LilyPond用JWT署名鍵}：P1のLilyPond認証APIが、LilyPond利用者のJWTへ
+        署名・検証するための秘密鍵。TeX用JWT署名鍵とは別物である。
+  \item \textbf{LilyPond用P2内部トークン}：P1からP2のPDF生成APIと移調APIを呼ぶための
+        共有トークン。この一つだけをLilyPondの二つの処理で共用する。
+\end{enumerate}
+
+管理用Macで\texttt{openssl rand -hex 32}を4回実行する。表示された順に上記1～4へ対応
+させ、取り違えないよう一つずつ対象ファイルへ貼り付ける。
+
+\begin{command}
+openssl rand -hex 32
+openssl rand -hex 32
+openssl rand -hex 32
+openssl rand -hex 32
+\end{command}
+
+Mac側には、あらかじめプレースホルダー入りの次の二ファイルを置いてある。
+
+\begin{itemize}
+  \item TeXNoteリポジトリ：\path{Server/P1/p1.env}
+  \item LilyPondNoteリポジトリ：\path{Server/P1/p1.env}
+\end{itemize}
+
+TeXNote側\texttt{p1.env}の二つの\texttt{<...>}を上記1、2の値に、LilyPondNote側の
+二つを上記3、4の値に置き換える。完成形は次の構造になる（下記の説明用記号そのものを
+保存してはならない）。
+
+TeXNoteリポジトリの\path{Server/P1/p1.env}：
+
+\begin{command}
+TEX_AUTH_SECRET_KEY=<TeX用JWT署名鍵>
+TEXNOTE_API_TOKEN=<TeX用P2内部トークン>
+TEXNOTE_P2_TYPESET_URL=http://192.168.40.10:8000/v1/typeset
+\end{command}
+
+LilyPondNoteリポジトリの\path{Server/P1/p1.env}：
+
+\begin{command}
+LILYPONDNOTE_AUTH_SECRET_KEY=<LilyPond用JWT署名鍵>
+LILYPONDNOTE_API_TOKEN=<LilyPond用P2内部トークン>
+LILYPONDNOTE_P2_TYPESET_URL=http://192.168.40.10:8001/v1/typeset
+LILYPONDNOTE_P2_TRANSPOSE_URL=http://192.168.40.10:8002/v1/transpose
+\end{command}
+
+LilyPondのPDFと移調は同じP1認証サービスから送られるため、P2内部トークンも共用する。
+
+編集後、Macから一度P1の\path{/tmp}へ転送する。同名ファイルなので一度に送らず、次の順で
+個別に配置する。P1の\path{/etc/texnote}と\path{/etc/lilypondnote}は初期状態では存在
+しないため、先に\texttt{install -d}で作る。
+
+\begin{command}
+# 管理用MacのTeXNoteリポジトリ直下で実行
+scp Server/P1/p1.env mat@192.168.30.10:/tmp/texnote-p1.env
+
+# P1で実行：ディレクトリ作成後、所有者root・600で配置
+sudo install -d -o root -g root -m 750 /etc/texnote
+sudo install -o root -g root -m 600 \
+  /tmp/texnote-p1.env /etc/texnote/p1.env
+
+# 管理用MacのLilyPondNoteリポジトリ直下で実行
+scp Server/P1/p1.env mat@192.168.30.10:/tmp/lilypondnote-p1.env
+
+# P1で実行
+sudo install -d -o root -g root -m 750 /etc/lilypondnote
+sudo install -o root -g root -m 600 \
+  /tmp/lilypondnote-p1.env /etc/lilypondnote/p1.env
+\end{command}
+
+\texttt{install}は、ファイルをコピーすると同時に所有者と権限を設定する。秘密値を含むため、
+\texttt{p1.env}を一般利用者から読める権限にしてはならない。
+
+\section{systemdで常時起動する}
+
+serviceファイルもMac側の各リポジトリに完成形で置いてある。抜粋を手入力せず、ファイル
+全体を転送する。TeXとLilyPondではWorkingDirectory、EnvironmentFile、ExecStart、ポートが
+異なる。
+
+\lstinputlisting[language={},caption={TeXNoteの完全なtexnote-p1.service}]{/Users/mat/Documents/Git/TeXNote/Server/P1/texnote-p1.service}
+
+\lstinputlisting[language={},caption={LilyPondNoteの完全なlilypondnote-p1.service}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/lilypondnote-p1.service}
+
+\begin{command}
+# 管理用MacのTeXNoteリポジトリ直下で実行
+scp Server/P1/texnote-p1.service mat@192.168.30.10:/tmp/
+
+# P1で実行
+sudo install -o root -g root -m 644 /tmp/texnote-p1.service \
+  /etc/systemd/system/texnote-p1.service
+
+# 管理用MacのLilyPondNoteリポジトリ直下で実行
+scp Server/P1/lilypondnote-p1.service mat@192.168.30.10:/tmp/
+
+# P1で実行
+sudo install -o root -g root -m 644 /tmp/lilypondnote-p1.service \
+  /etc/systemd/system/lilypondnote-p1.service
+\end{command}
+
+\begin{command}
+sudo systemctl daemon-reload
+sudo systemctl enable --now texnote-p1.service lilypondnote-p1.service
+systemctl status texnote-p1.service --no-pager -l
+systemctl status lilypondnote-p1.service --no-pager -l
+sudo ss -ltnp | grep -E ':8000|:8001'
+\end{command}
+
+\section{UFWとネットワーク境界}
+
+P0からP1の二つの認証ポートだけを許可する。P1からP2へは、ルーターACLで8000、8001、
+8002だけを許可する。
+
+\begin{command}
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow from 192.168.99.0/24 to any port 22 proto tcp
+sudo ufw allow from 192.168.20.10 to any port 8000 proto tcp
+sudo ufw allow from 192.168.20.10 to any port 8001 proto tcp
+sudo ufw enable
+sudo ufw status verbose
+\end{command}
+
+\section{初回疎通確認}
+
+P0のLAN内入口をTCP 8080（TeXNote）とTCP 8081（LilyPondNote）に分けた場合の
+ログイン確認例を次に示す。\texttt{192.168.20.10}は実際のP0 IPへ置き換える。
+
+\begin{command}
+curl -i -X POST http://192.168.20.10:8080/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"tex-user@example.com","password":"REPLACE_ME","service":"texnote"}'
+
+curl -i -X POST http://192.168.20.10:8081/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"music-user@example.com","password":"REPLACE_ME","service":"lilypondnote"}'
+\end{command}
+
+正しい組合せはHTTP 200となる。次の誤った組合せは、仮に同じメールアドレスとパスワードが
+両DBへ登録されていてもHTTP 422となる。
+
+\begin{command}
+curl -i -X POST http://192.168.20.10:8081/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"tex-user@example.com","password":"REPLACE_ME","service":"texnote"}'
+\end{command}
+
+\begin{enumerate}
+  \item TeXアカウントでTeXの\texttt{/login}と\texttt{/compile}を確認する。
+  \item LilyPondアカウントで一度ログインし、同じJWTで\texttt{/compile}と
+        \texttt{/transpose}を確認する。
+  \item \texttt{/compile}がPDF、\texttt{/transpose}が移調後テキストだけを返すことを確認する。
+  \item \texttt{/me}の\texttt{usageByService}に両方の回数が表示されることを確認する。
+  \item DBを直接確認し、同じ\texttt{usage}テーブルにサービス種別が記録されることを確認する。
+\end{enumerate}
+
+\begin{command}
+sudo -u lilypondnote-p1 sqlite3 \
+  /opt/lilypondnote/P1/lilypondnote.db \
+  'SELECT user_id, created_at, service, success FROM usage ORDER BY id DESC LIMIT 20;'
+\end{command}
+
+試験用利用者の登録方法は、次章ではなく文書末尾の「日常運用手続き」を参照する。
+
+\section{完了チェックリスト}
+
+\begin{itemize}
+  \item[$\square$] TeXとLilyPondが別OSユーザー、別venv、別DBである。
+  \item[$\square$] 各venvへ対応するrequirementsだけを導入した。
+  \item[$\square$] P1にTeX LiveやLilyPond本体を導入していない。
+  \item[$\square$] LilyPondの完成済み\texttt{main.py}に最初から\texttt{/transpose}がある。
+  \item[$\square$] LilyPond PDFとリモート移調は同じDB・利用者・JWT・契約プラン・月間上限を共有する。
+  \item[$\square$] ローカル移調はP1へ到達せず、リモート移調だけが利用回数へ記録される。
+  \item[$\square$] LilyPondの\texttt{plans.py}にfree/standard/proの上限が定義されている。
+  \item[$\square$] \texttt{usage.service}で\texttt{typeset}と\texttt{transpose}を判別できる。
+  \item[$\square$] P0からだけP1の8000と8001へ接続できる。
+  \item[$\square$] P1再起動後に両サービスが自動復旧する。
+  \item[$\square$] 二つのDBをそれぞれ復元できるバックアップがある。
+\end{itemize}
+
+\clearpage
+\section{日常運用手続き}
+
+この章を、初回の試験利用者作成と、構築後の日常運用の両方に使用する。以下の操作は
+\textbf{TeX DBとLilyPond DBのどちらを対象にしているか}を確認してから実行する。
+
+\subsection{運用対象の早見表}
+
+\begin{longtable}{@{}p{35mm}p{54mm}p{54mm}@{}}
+\toprule
+操作 & TeXNote & LilyPondNote\\
+\midrule
+DB & \path{/opt/texnote/P1/tex_service.db} & \path{/opt/lilypondnote/P1/lilypondnote.db}\\
+登録 & \texttt{tools.useradd} & \texttt{useradd.py}\\
+パスワード変更 & \texttt{tools.reset\_password} & \texttt{reset\_password.py}\\
+契約値 & \texttt{plan}: free/standard/pro & \texttt{plan}: free/standard/pro\\
+利用履歴 & TeXコンパイルだけ & PDFとリモート移調を\texttt{service}で区別\\
+サービス & \texttt{texnote-p1.service} & \texttt{lilypondnote-p1.service}\\
+\bottomrule
+\end{longtable}
+
+\subsection{DBをバックアップする}
+
+SQLiteの\texttt{.backup}を使うため、通常はサービスを停止せず整合したバックアップを
+取得できる。バックアップ先を最初に作る。
+
+\begin{command}
+sudo install -d -o texnote-p1 -g texnote-p1 -m 700 \
+  /opt/texnote/P1/backups
+sudo install -d -o lilypondnote-p1 -g lilypondnote-p1 -m 700 \
+  /opt/lilypondnote/P1/backups
+\end{command}
+
+TeX DBをバックアップする。
+
+\begin{command}
+stamp=$(date +%Y%m%d-%H%M%S)
+sudo -u texnote-p1 sqlite3 /opt/texnote/P1/tex_service.db \
+  ".backup '/opt/texnote/P1/backups/tex_service-$stamp.db'"
+sudo -u texnote-p1 sqlite3 \
+  "/opt/texnote/P1/backups/tex_service-$stamp.db" 'PRAGMA integrity_check;'
+\end{command}
+
+LilyPond DBをバックアップする。PDF履歴と移調履歴は同じDBに入っているため、これ1個で
+両方を保全できる。
+
+\begin{command}
+stamp=$(date +%Y%m%d-%H%M%S)
+sudo -u lilypondnote-p1 sqlite3 /opt/lilypondnote/P1/lilypondnote.db \
+  ".backup '/opt/lilypondnote/P1/backups/lilypondnote-$stamp.db'"
+sudo -u lilypondnote-p1 sqlite3 \
+  "/opt/lilypondnote/P1/backups/lilypondnote-$stamp.db" \
+  'PRAGMA integrity_check;'
+\end{command}
+
+結果が\texttt{ok}であることを確認する。バックアップはP1内だけでなく、管理端末または
+暗号化した別媒体へ定期的にコピーする。秘密情報を含むためGitへ登録しない。
+
+\subsection{バックアップから復元する}
+
+復元はDBを上書きするため、対象サービスを止め、現在のDBも退避してから行う。
+
+\begin{command}
+# LilyPond DBの復元例。TeXの場合はサービス名とパスをTeX用へ置き換える
+sudo systemctl stop lilypondnote-p1.service
+sudo cp -p /opt/lilypondnote/P1/lilypondnote.db \
+  /opt/lilypondnote/P1/lilypondnote.db.before-restore
+sudo cp -p /opt/lilypondnote/P1/backups/<復元するファイル>.db \
+  /opt/lilypondnote/P1/lilypondnote.db
+sudo chown lilypondnote-p1:lilypondnote-p1 \
+  /opt/lilypondnote/P1/lilypondnote.db
+sudo -u lilypondnote-p1 sqlite3 \
+  /opt/lilypondnote/P1/lilypondnote.db 'PRAGMA integrity_check;'
+sudo systemctl start lilypondnote-p1.service
+systemctl status lilypondnote-p1.service --no-pager -l
+\end{command}
+
+\subsection{ユーザーを一覧・個別確認する}
+
+TeX利用者を個別確認する。パスワードハッシュは表示しない。
+
+\begin{command}
+sudo -u texnote-p1 sh -c \
+  'cd /opt/texnote/P1 && .venv/bin/python -m tools.check02 user@example.com'
+\end{command}
+
+TeX利用者を一覧表示する。
+
+\begin{command}
+sudo -u texnote-p1 sqlite3 -header -column \
+  /opt/texnote/P1/tex_service.db \
+  'SELECT id,email,status,plan,created_at FROM users ORDER BY id;'
+\end{command}
+
+LilyPond利用者と当月利用内訳を一覧表示する。
+
+\begin{command}
+sudo -u lilypondnote-p1 sqlite3 -header -column \
+  /opt/lilypondnote/P1/lilypondnote.db \
+  "SELECT u.id,u.email,u.status,u.plan,
+          SUM(CASE WHEN h.service='typeset' THEN 1 ELSE 0 END) AS typeset_count,
+          SUM(CASE WHEN h.service='transpose' THEN 1 ELSE 0 END) AS transpose_count
+   FROM users AS u
+   LEFT JOIN usage AS h ON h.user_id=u.id
+     AND strftime('%Y-%m',h.created_at)=strftime('%Y-%m','now')
+   GROUP BY u.id ORDER BY u.id;"
+\end{command}
+
+\lstinputlisting[caption={TeX利用者個別確認 tools/check02.py}]{/Users/mat/Documents/Git/TeXNote/Server/P1/progs/tools/check02.py}
+
+\subsection{ユーザーを登録する}
+
+TeX利用者は登録時にプランを選ぶ。入力できるプランは\texttt{free}、
+\texttt{standard}、\texttt{pro}である。
+
+\begin{command}
+sudo -u texnote-p1 sh -c \
+  'cd /opt/texnote/P1 && .venv/bin/python -m tools.useradd'
+\end{command}
+
+LilyPond利用者も登録時に\texttt{free}、\texttt{standard}、\texttt{pro}からプランを
+選ぶ。何も入力しなければ\texttt{free}となり、月間上限は50回である。未定義のプラン名は
+登録前に拒否される。
+
+\begin{command}
+sudo -u lilypondnote-p1 sh -c \
+  'cd /opt/lilypondnote/P1 && .venv/bin/python useradd.py'
+\end{command}
+
+登録直後に一覧または個別照会で、メールアドレス、状態、契約値を確認する。サービス再起動は
+不要である。
+
+\lstinputlisting[caption={TeX利用者登録 tools/useradd.py}]{/Users/mat/Documents/Git/TeXNote/Server/P1/progs/tools/useradd.py}
+\lstinputlisting[caption={LilyPond利用者登録 useradd.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/useradd.py}
+
+\subsection{登録済みユーザーのパスワードを変更する}
+
+これは管理者によるパスワード再設定である。利用者から本人確認を行った後、対象のメール
+アドレスを一覧または個別照会で確認してから実行する。コマンド行へパスワードを書かず、
+画面に表示されない対話入力で新しいパスワードを2回入力する。
+
+TeX利用者のパスワードを変更する。
+
+\begin{command}
+sudo -u texnote-p1 sh -c \
+  'cd /opt/texnote/P1 && .venv/bin/python -m tools.reset_password \
+   user@example.com'
+\end{command}
+
+LilyPond利用者のパスワードを変更する。
+
+\begin{command}
+sudo -u lilypondnote-p1 sh -c \
+  'cd /opt/lilypondnote/P1 && .venv/bin/python reset_password.py \
+   user@example.com'
+\end{command}
+
+どちらも平文パスワードを保存せず、DBの\texttt{password\_hash}だけを新しいArgon2ハッシュ
+へ置き換える。ユーザーの契約、状態、利用履歴は変えない。サービス再起動は不要である。
+変更後は新しいパスワードでログインでき、古いパスワードでログインできないことを確認する。
+既に発行済みのJWTはパスワード変更だけでは失効しないため、漏えい事故の場合はJWT署名鍵の
+ローテーションも別途検討する。
+
+\lstinputlisting[caption={TeXパスワード再設定 tools/reset\_password.py}]{/Users/mat/Documents/Git/TeXNote/Server/P1/progs/tools/reset_password.py}
+\lstinputlisting[caption={LilyPondパスワード再設定 reset\_password.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/reset_password.py}
+
+\subsection{利用停止と再開}
+
+通常の解約・一時停止では履歴を残すため、ユーザー行を削除せず
+\texttt{status='inactive'}へ変更する。停止後は新規ログインが拒否され、既発行JWTもAPI利用時
+のDB確認で拒否される。
+
+\begin{command}
+# TeX利用者を停止
+sudo -u texnote-p1 sqlite3 /opt/texnote/P1/tex_service.db \
+  "UPDATE users SET status='inactive' WHERE email='user@example.com';"
+
+# LilyPond利用者を停止
+sudo -u lilypondnote-p1 sqlite3 /opt/lilypondnote/P1/lilypondnote.db \
+  "UPDATE users SET status='inactive' WHERE email='user@example.com';"
+\end{command}
+
+再開時は対象DBで\texttt{status='active'}へ戻す。更新後は必ずSELECTまたは一覧表示で
+対象者と状態を確認する。サービス再起動は不要である。
+
+\subsection{ユーザーを物理削除する}
+
+物理削除は監査・利用履歴も失うため、通常は行わない。削除が必要な場合は、直前バックアップ、
+利用停止、対象メールアドレスの再確認を行う。
+
+TeX DBは外部キーの連鎖削除を有効にして、関連履歴とAPIキーを削除する。
+
+\begin{command}
+sudo -u texnote-p1 sqlite3 /opt/texnote/P1/tex_service.db \
+  "PRAGMA foreign_keys=ON;
+   BEGIN IMMEDIATE;
+   DELETE FROM users WHERE email='user@example.com' AND status='inactive';
+   COMMIT;"
+\end{command}
+
+LilyPond DBは履歴を先に削除してからユーザーを削除する。
+
+\begin{command}
+sudo -u lilypondnote-p1 sqlite3 /opt/lilypondnote/P1/lilypondnote.db \
+  "BEGIN IMMEDIATE;
+   DELETE FROM usage WHERE user_id=(SELECT id FROM users
+     WHERE email='user@example.com' AND status='inactive');
+   DELETE FROM users WHERE email='user@example.com' AND status='inactive';
+   COMMIT;"
+\end{command}
+
+削除後に一覧で不存在を確認する。誤削除した場合は、以後の書込みを止めてバックアップから
+復元する。
+
+\subsection{契約内容を更新する}
+
+TeXとLilyPondのどちらも、回数そのものではなくプラン名を変更する。各上限は、それぞれの
+サービスディレクトリに配置した\texttt{plans.py}に定義される。
+
+\begin{command}
+sudo -u texnote-p1 sh -c \
+  'cd /opt/texnote/P1 && .venv/bin/python -m tools.change_plan \
+   user@example.com standard'
+sudo -u texnote-p1 sh -c \
+  'cd /opt/texnote/P1 && .venv/bin/python -m tools.check02 user@example.com'
+\end{command}
+
+LilyPond利用者のプランも専用コマンドで変更する。
+
+\begin{command}
+sudo -u lilypondnote-p1 sh -c \
+  'cd /opt/lilypondnote/P1 && .venv/bin/python change_plan.py \
+   user@example.com standard'
+sudo -u lilypondnote-p1 sqlite3 -header -column \
+  /opt/lilypondnote/P1/lilypondnote.db \
+  "SELECT id,email,status,plan FROM users
+   WHERE email='user@example.com';"
+\end{command}
+
+変更は次のAPI要求から反映され、サービス再起動は不要である。LilyPondのPDFとリモート移調へ
+別々の上限を設定する構造ではない。ローカル移調はP1を利用しないため、どのプランでも
+カウント対象外である。
+
+\lstinputlisting[caption={TeX契約プラン変更 tools/change\_plan.py}]{/Users/mat/Documents/Git/TeXNote/Server/P1/progs/tools/change_plan.py}
+\lstinputlisting[caption={LilyPond契約プラン変更 change\_plan.py}]{/Users/mat/Documents/Git/LilyPondNote/Server/P1/change_plan.py}
+
+\subsection{日常のサービス・ログ確認}
+
+\begin{command}
+systemctl is-active texnote-p1.service lilypondnote-p1.service
+systemctl is-enabled texnote-p1.service lilypondnote-p1.service
+journalctl -u texnote-p1.service -n 100 --no-pager
+journalctl -u lilypondnote-p1.service -n 100 --no-pager
+sudo ufw status verbose
+df -h /opt/texnote/P1 /opt/lilypondnote/P1
+\end{command}
+
+ログへパスワード、JWT、内部トークン、楽譜本文を出力しない。異常時は、DB操作を繰り返す
+前にログとバックアップを確保する。
+
+\clearpage
+\appendix
+\section{旧サービスの停止・撤去}
+
+この付録はP1の新規構築手順ではなく、以前のsystemdサービスやNginxが残っている場合の
+調査・停止・撤去手順である。名前だけから推測して削除せず、必ず
+\textbf{調査、内容確認、停止、自動起動解除、定義削除}の順で進める。現在必要な
+\texttt{texnote-p1.service}と\texttt{lilypondnote-p1.service}を誤って停止・削除しない。
+
+\subsection{以前のsystemdサービスを調べる}
+
+動作中、登録済み、異常終了のサービスをそれぞれ表示する。
+
+\begin{command}
+systemctl list-units --type=service --state=running
+systemctl list-unit-files --type=service
+systemctl --failed
+
+# 関係しそうな名前を絞り込む
+systemctl list-unit-files --type=service | \
+  grep -Ei 'tex|lily|python|uvicorn|fastapi|nginx'
+
+# systemd以外から起動されたプロセスと待受ポートも確認する
+ps aux | grep -Ei 'uvicorn|python|texnote|lilypond'
+sudo ss -ltnp
+\end{command}
+
+候補を見つけたら、以下の\texttt{OLDUNIT}を実際のユニット名へ置き換える。
+\texttt{systemctl cat}で起動コマンドを、\texttt{FragmentPath}でserviceファイルの実体を
+確認する。確認が終わるまで削除してはならない。
+
+\begin{command}
+OLDUNIT=old-texnote.service
+systemctl status "$OLDUNIT" --no-pager -l
+systemctl cat "$OLDUNIT"
+systemctl show "$OLDUNIT" -p FragmentPath -p DropInPaths
+journalctl -u "$OLDUNIT" -n 100 --no-pager
+\end{command}
+
+\subsection{以前のsystemdサービスを止めて自動起動を解除する}
+
+対象名と内容が間違いないことを確認した後、停止と自動起動解除を同時に行う。
+
+\begin{command}
+OLDUNIT=old-texnote.service
+sudo systemctl disable --now "$OLDUNIT"
+systemctl is-active "$OLDUNIT"
+systemctl is-enabled "$OLDUNIT"
+\end{command}
+
+通常、確認結果が\texttt{inactive}と\texttt{disabled}なら停止・解除済みである。
+待受ポートが残る場合は、別ユニット、cron、手動起動プロセス、コンテナ等がないかを
+\texttt{sudo ss -ltnp}とプロセス一覧で再確認する。
+
+\subsection{以前のsystemd定義を削除する}
+
+\texttt{FragmentPath}が\path{/etc/systemd/system/old-texnote.service}のように
+\path{/etc/systemd/system}配下であり、自分で作った旧定義だと確認できた場合だけ、その
+表示されたパスを指定して削除する。次は例であり、実際のパスへ置き換える。
+
+\begin{command}
+sudo rm /etc/systemd/system/old-texnote.service
+sudo systemctl daemon-reload
+sudo systemctl reset-failed
+systemctl status old-texnote.service
+\end{command}
+
+最後が\texttt{Unit ... could not be found}なら定義もなくなっている。
+\path{/lib/systemd/system}または\path{/usr/lib/systemd/system}配下はパッケージ管理下である
+可能性が高い。直接削除せず、所有パッケージを確認する。
+
+\begin{command}
+dpkg -S /lib/systemd/system/<対象>.service
+\end{command}
+
+パッケージが他の用途に不要であることを確認してから\texttt{apt remove}を検討する。
+\texttt{DropInPaths}に追加設定が表示された場合も、内容と必要性を個別に確認してから扱う。
+
+\section{以前のNginxの停止・撤去}
+
+\subsection{Nginxの稼働状態と設定を調べる}
+
+まずsystemd、プロセス、80/443番ポートの三方向から状態を確認する。
+
+\begin{command}
+systemctl status nginx --no-pager -l
+systemctl is-enabled nginx
+systemctl cat nginx
+pgrep -a nginx
+sudo ss -ltnp '( sport = :80 or sport = :443 or sport = :8000 )'
+\end{command}
+
+\texttt{systemctl cat nginx}で表示されるのはNginxプログラムの起動方法であり、
+\texttt{server\_name}や\texttt{proxy\_pass}等のサイト設定ではない。次に設定ディレクトリと
+有効なサイトを調べる。
+
+\begin{command}
+sudo find /etc/nginx -maxdepth 3 \
+  \( -type f -o -type l \) -print
+ls -l /etc/nginx/sites-enabled/
+ls -l /etc/nginx/sites-available/
+\end{command}
+
+主な確認対象は\path{/etc/nginx/nginx.conf}、\path{/etc/nginx/sites-available}、
+\path{/etc/nginx/sites-enabled}、\path{/etc/nginx/conf.d}である。Debian系の標準構成では、
+\path{sites-available}は設定原本・候補の置場であり、\path{sites-enabled}からリンクされた
+ものが有効になる。ただし、最終的に何が読み込まれるかは\texttt{nginx.conf}の
+\texttt{include}と\texttt{nginx -T}で確定する。
+
+\subsection{有効なサイト設定とリンク先を確認する}
+
+例えば\path{/etc/nginx/sites-enabled/texnote-p1}がある場合、名前だけで旧設定と判断せず、
+リンク先と内容を確認する。
+
+\begin{command}
+ls -l /etc/nginx/sites-enabled/
+readlink -f /etc/nginx/sites-enabled/texnote-p1
+sudo sed -n '1,240p' /etc/nginx/sites-enabled/texnote-p1
+\end{command}
+
+特に\texttt{listen}、\texttt{server\_name}、\texttt{location}、
+\texttt{proxy\_pass}を確認する。次の関係なら、Nginxが80番の入口となり、同じ機械の旧
+Uvicornへ中継する構成である。
+
+\begin{command}
+listen 80;
+proxy_pass http://127.0.0.1:8000;
+\end{command}
+
+\path{sites-available/default}や\path{sites-available/texnote-p1.old}は、存在するだけでは
+有効とは限らない。\path{sites-enabled}からリンクされているか、ほかの設定から直接
+\texttt{include}されているかを確認する。
+
+\begin{command}
+sudo grep -Rni 'texnote-p1.old' /etc/nginx
+sudo grep -RniE 'include|proxy_pass|127\.0\.0\.1:8000|server_name' \
+  /etc/nginx/nginx.conf /etc/nginx/sites-enabled \
+  /etc/nginx/sites-available /etc/nginx/conf.d
+\end{command}
+
+現在版と\texttt{.old}の違いを把握する場合は、削除前に差分を確認する。
+
+\begin{command}
+sudo diff -u /etc/nginx/sites-available/texnote-p1.old \
+  /etc/nginx/sites-available/texnote-p1
+\end{command}
+
+\subsection{Nginxが実際に読み込んだ完成設定を確認する}
+
+\texttt{nginx -T}は構文検査とともに、include後の全設定を表示する。ファイルが置かれて
+いるだけなのか、実際に読み込まれているのかを確定するために必ず確認する。
+
+\begin{command}
+sudo nginx -T
+sudo nginx -T 2>&1 | \
+  grep -nE 'configuration file|listen|server_name|proxy_pass'
+\end{command}
+
+出力には証明書のパス、ホスト名、内部アドレス等が含まれ得るため、保存・共有時の扱いに
+注意する。
+
+\subsection{旧P1構成かを判定する}
+
+次をすべて確認できた場合、旧TeXNoteのNginx・認証API構成である可能性が高い。
+
+\begin{itemize}
+  \item 現在の機械がP1の\texttt{192.168.30.10}である。
+  \item Nginxが80番で待ち受ける。
+  \item 有効な\texttt{texnote-p1}設定が\texttt{127.0.0.1:8000}へproxyする。
+  \item \texttt{tex-auth.service}のUvicornが\texttt{127.0.0.1:8000}で待ち受ける。
+  \item 新構成ではP0がNginxを担当し、P1はNginxを持たない。
+\end{itemize}
+
+次でP1のアドレス、旧認証サービス、待受を突き合わせる。
+
+\begin{command}
+hostname
+ip -br address
+systemctl show tex-auth.service \
+  -p MainPID -p ExecStart -p FragmentPath
+systemctl cat tex-auth.service
+sudo ss -ltnp '( sport = :80 or sport = :8000 )'
+\end{command}
+
+一つでも不明なら停止せず、設定と利用者をさらに確認する。この機械がP0なら、新構成でも
+Nginxを使用するため、旧P1だと思って停止してはならない。
+
+\subsection{Nginx全体を止めて自動起動を解除する}
+
+上記調査で旧P1構成と確定し、ほかのWebサイトやリバースプロキシがNginxを使用していない
+ことを確認してから実行する。まず復旧用に設定全体を退避する。
+
+\begin{command}
+sudo cp -a /etc/nginx /etc/nginx.backup-before-p1-stop
+sudo systemctl disable --now nginx
+systemctl is-active nginx
+systemctl is-enabled nginx
+pgrep -a nginx
+sudo ss -ltnp '( sport = :80 or sport = :443 or sport = :8000 )'
+\end{command}
+
+\texttt{inactive}、\texttt{disabled}となり、NginxプロセスとNginxによる80/443番待受が
+なければ停止できている。80/443番が残る場合は、表示されたPIDとプログラム名から別の
+Webサーバーを調べる。
+
+\subsection{古いサイト設定だけを無効化する}
+
+別用途でNginxを使い続ける場合は、Nginx全体を止めず、古いサイト設定だけを無効化する。
+\path{/etc/nginx/sites-enabled}の対象がシンボリックリンクであり、リンク先も間違いないことを
+\texttt{ls -l}で確認してから、enabled側だけを削除する。
+
+\begin{command}
+ls -l /etc/nginx/sites-enabled/
+sudo rm /etc/nginx/sites-enabled/<古い設定名>
+sudo nginx -t
+sudo systemctl reload nginx
+\end{command}
+
+\texttt{nginx -t}が失敗した場合はreloadせず、削除したリンクを復元して設定を修正する。
+\path{/etc/nginx/sites-available}側の原本は残るため、必要なら再びリンクを作成できる。
+
+\subsection{Nginxパッケージ自体を削除する}
+
+Nginxを今後まったく使わない場合に限る。まず設定を退避し、停止・解除する。
+
+\begin{command}
+sudo cp -a /etc/nginx /etc/nginx.backup-before-removal
+sudo systemctl disable --now nginx
+sudo apt remove nginx
+\end{command}
+
+設定ファイルも削除する場合は\texttt{purge}を使うが、復元が必要になる可能性を考慮する。
+
+\begin{command}
+sudo apt purge nginx nginx-common
+sudo apt autoremove
+\end{command}
+
+最後に\texttt{systemctl status nginx}、\texttt{pgrep -a nginx}、
+\texttt{sudo ss -ltnp}で、ユニット、プロセス、待受ポートを再確認する。
+
+\section{現在のUFW状態と設定の確認}
+
+この付録では、ルールを変更する前に、UFWが有効か、既定ポリシーが何か、どの通信を
+許可しているかを調べる。SSH接続中に不用意にルールを削除すると、切断後に再接続できなく
+なる可能性があるため、まず確認と退避だけを行う。
+
+\subsection{有効・無効と既定ポリシーを確認する}
+
+簡易表示と詳細表示を順に確認する。
+
+\begin{command}
+sudo ufw status
+sudo ufw status verbose
+\end{command}
+
+\texttt{Status: active}なら有効、\texttt{Status: inactive}なら無効である。詳細表示では、
+次の項目を確認する。
+
+\begin{longtable}{@{}p{35mm}p{108mm}@{}}
+\toprule
+表示項目 & 意味\\
+\midrule
+\texttt{Logging} & 遮断等をUFWログへ記録する設定\\
+\texttt{deny (incoming)} & 外部からの接続を既定では拒否する\\
+\texttt{allow (outgoing)} & サーバーから外部への接続を既定では許可する\\
+\texttt{routed} & この機械を経由して転送される通信の既定動作\\
+\bottomrule
+\end{longtable}
+
+P1では通常、受信は既定拒否とし、P0からP1への必要ポートと管理ネットワークからのSSHだけを
+明示的に許可する。
+
+\subsection{許可・拒否ルールを番号付きで確認する}
+
+\begin{command}
+sudo ufw status numbered
+sudo ufw show added
+\end{command}
+
+\texttt{status numbered}は現在の有効ルールを番号付きで表示する。\texttt{show added}は、
+UFWへ追加されたルールをコマンドに近い形で表示する。IPv4とIPv6のルールが別々に表示される
+場合がある。
+
+番号指定でルールを削除できるが、番号は削除のたびに詰め直される。対象を十分確認し、1件
+削除するたびに一覧を再表示する。
+
+\begin{command}
+sudo ufw status numbered
+sudo ufw delete <削除する番号>
+sudo ufw status numbered
+\end{command}
+
+この操作は接続中のSSHやサービスへ影響し得る。確認だけが目的なら\texttt{delete}は実行
+しない。
+
+\subsection{低レベルのルールを確認する}
+
+UFWが生成したnetfilterルールを含めて確認する場合は次を使う。出力は多いため、通常の点検は
+\texttt{status verbose}と\texttt{status numbered}で十分である。
+
+\begin{command}
+sudo ufw show raw
+\end{command}
+
+\subsection{アプリケーション定義を確認する}
+
+\begin{command}
+sudo ufw app list
+sudo ufw app info OpenSSH
+sudo ufw app info 'Nginx Full'
+\end{command}
+
+アプリケーション定義は、その名称がどのポートを意味するかを示すだけである。一覧に
+\texttt{Nginx Full}が存在しても、実際に許可されているとは限らない。現在有効な許可は必ず
+\texttt{sudo ufw status numbered}で確認する。
+
+\subsection{UFWのsystemd状態を確認する}
+
+\begin{command}
+systemctl status ufw.service --no-pager -l
+systemctl is-enabled ufw.service
+\end{command}
+
+UFWは起動時にルールを設定した後、常駐プロセスを必要としないため、
+\texttt{active (exited)}と表示されても異常ではない。実際の有効・無効は
+\texttt{sudo ufw status verbose}も併せて判断する。
+
+\subsection{旧構成の80番・8000番ルールを確認する}
+
+旧Nginxや旧認証APIで、80番または8000番を広く許可したルールが残っていないか確認する。
+
+\begin{command}
+sudo ufw status numbered
+sudo ss -ltnp '( sport = :80 or sport = :443 or sport = :8000 )'
+\end{command}
+
+例えば\texttt{80/tcp ALLOW IN Anywhere}や\texttt{8000/tcp ALLOW IN Anywhere}は、全送信元
+からの接続を許可する。ルールがあることと、実際にプロセスが待ち受けていることは別なので、
+UFW一覧と\texttt{ss}の両方を確認する。なお、\texttt{grep ':80'}では8000番も一致するため、
+上記の\texttt{ss}フィルターを使ってポートを区別する。
+
+\subsection{変更前にSSH許可と設定退避を確認する}
+
+SSHで作業している場合、最初に現在の接続元とSSH許可ルールを確認する。
+
+\begin{command}
+echo "$SSH_CONNECTION"
+sudo ufw status numbered
+\end{command}
+
+管理端末のネットワークから22/tcpへの許可がない状態でUFWを有効化・再設定してはならない。
+変更前のUFW設定を退避する場合は、日付を付けた明示的な保存先を使う。
+
+\begin{command}
+sudo cp -a /etc/ufw /etc/ufw.backup-before-p1-change
+sudo ufw status verbose
+sudo ufw status numbered
+\end{command}
+
+ルール変更後もSSHセッションをすぐ切断せず、別の端末から新規SSH接続できることを確認して
+から作業を終了する。
+
+\end{document}

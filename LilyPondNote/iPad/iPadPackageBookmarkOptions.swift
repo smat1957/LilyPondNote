@@ -1,0 +1,3 @@
+// iPad版でPackageブックマークを作る際のiOS固有オプションを選択する。
+
+typealias PlatformPackageBookmarkOptions = iOSPackageBookmarkOptions

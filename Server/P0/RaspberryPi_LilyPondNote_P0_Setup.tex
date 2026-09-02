@@ -1,0 +1,637 @@
+\documentclass[uplatex,a4paper,11pt]{jsarticle}
+\usepackage[margin=22mm]{geometry}
+\usepackage[dvipdfmx]{hyperref,xcolor}
+\usepackage{fvextra,enumitem,longtable,booktabs,amssymb}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  urlcolor=blue!65!black,
+  pdftitle={TeXNote・LilyPondNote P0リバースプロキシ・ファイアウォール構築手順}
+}
+\definecolor{commandbg}{RGB}{244,246,248}
+\DefineVerbatimEnvironment{command}{Verbatim}{
+  fontsize=\small,
+  frame=single,
+  rulecolor=\color{gray!55},
+  breaklines=true,
+  breakanywhere=true
+}
+\setlist{nosep}
+
+\title{TeXNote・LilyPondNote P0\
+リバースプロキシ・ファイアウォール構築手順\
+\large P1認証サーバーへ安全に接続する公開入口}
+\author{}
+\date{2026年8月31日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本書は、TeXNoteとLilyPondNoteの公開入口となるRaspberry Pi「P0」に、Nginx
+リバースプロキシとUFWファイアウォールを構築し、P1上の二つの認証サービスへ接続する
+手順をまとめたものである。P0には認証処理、ユーザーDB、JWT署名鍵、P2内部トークンを
+置かない。P0はHTTPS終端と公開APIの絞り込みだけを担当し、認証とP2への中継はP1が
+引き続き担当する。
+本文を上から順に実行すると、ポート分離、リバースプロキシ、ファイアウォール、HTTPSを
+備えた完成構成になる。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{最初に区別すること}
+
+P0とP1は役割が異なる。P0へP1のプログラムをコピーしたり、P0にユーザーDBを作成したり
+してはならない。
+
+\begin{longtable}{@{}p{18mm}p{51mm}p{77mm}@{}}
+\toprule
+機器 & 役割 & 配置するもの\\
+\midrule
+P0 & インターネット側の公開入口 & Nginx、TLS証明書、UFW、アクセスログ\\
+P1 & 認証とAPI中継 & TeX用・LilyPond用FastAPI、JWT署名鍵、SQLite DB、P2内部トークン\\
+P2 & 処理サービス & TeX API、LilyPond PDF API、LilyPond移調テキストAPI\\
+\bottomrule
+\end{longtable}
+
+完成時の通信経路は次のとおりである。
+
+\begin{command}
+TeXNote client       -- HTTPS --> P0 -- HTTP --> P1 TeX認証 TCP 8000
+                                                   |
+                                                   v
+                                                P2 TeX TCP 8000
+
+LilyPondNote client  -- HTTPS --> P0 -- HTTP --> P1 Lily認証 TCP 8001
+                                                   |-- PDF生成 -> P2 TCP 8001
+                                                   `-- 移調テキスト -> P2 TCP 8002
+\end{command}
+
+インターネットへ公開するのはP0のTCP 443だけである。P1、P2、TCP 8000、8001、8002、
+SSHを直接公開しない。
+
+\section{前提値と置換する値}
+
+本書では完成構成の例として次の値を使う。構築先のネットワークが異なる場合は、
+\texttt{P0\_IP}と\texttt{P1\_IP}を実際の固定アドレスへ読み替える。
+
+\begin{longtable}{@{}p{52mm}p{48mm}p{48mm}@{}}
+\toprule
+項目 & 本書の例 & 実機で確認する場所\\
+\midrule
+P0の固定IP & \texttt{192.168.3.22} & ルーター、DHCP予約、P0\\
+P1（認証）の固定IP & \texttt{192.168.30.10} & ルーター、DHCP予約、P1\\
+P2（処理）の固定IP & \texttt{192.168.40.10} & ルーター、DHCP予約、P2\\
+管理端末とアプリのLAN & \texttt{192.168.3.0/24} & Mac、iPad、iPhoneのLAN\\
+P1 TeX認証API & TCP 8000 & \texttt{texnote-p1.service}\\
+P1 LilyPond認証API & TCP 8001 & \texttt{lilypondnote-p1.service}\\
+P0 TeXNote公開入口 & TCP 8080 & TeXNoteに入力するURL\\
+P0 LilyPondNote公開入口 & TCP 8081 & LilyPondNoteに入力するURL\\
+公開ドメイン & \texttt{tex.example.com}、\texttt{lilypond.example.com} & DNS設定\\
+HTTP要求上限 & TeX 32 MiB、LilyPond 8 MiB & 各P1実装と一致\\
+\bottomrule
+\end{longtable}
+
+\texttt{192.168.40.10}は、TeXコンパイル、LilyPond PDF生成、LilyPond移調テキスト生成を
+実行する\textbf{P2処理サーバーの固定IP}である。P2は処理用ネットワーク
+\texttt{192.168.40.0/24}に置き、インターネットやP0から直接接続させない。P1だけが、
+認証・利用上限確認後の内部要求をP2へ送る。
+
+\textbf{重要：}P1とP2は別ホストなので、両ホストで同じポート番号を使用しても衝突しない。
+P1ではTeX認証が8000、LilyPond認証が8001、P2ではTeXコンパイルが8000、
+LilyPond PDF生成が8001、LilyPond移調テキスト生成が8002である。LilyPondの二つの
+サービスはP1上の同じ認証、ユーザーDB、JWTを使用する。
+
+\section{作業前の安全確認}
+
+\begin{enumerate}
+  \item P0、P1には固定IPまたはDHCP予約を設定する。
+  \item UFWを有効にする前に、管理端末からのSSH許可規則を必ず追加する。
+  \item 作業中のSSH接続を残したまま、別ターミナルで新しいSSH接続を試験する。
+  \item P1の認証APIとP2への中継が完成していることを確認してからP0を構築する。
+  \item ルーターのポート転送は、HTTPSの試験直前まで作成しない。
+  \item IPv6を使う場合はIPv6にも同じ境界制御を適用する。できない場合はサーバー用
+        ネットワークへのグローバルIPv6配布を停止する。
+\end{enumerate}
+
+P1の稼働状態と実際の待受を記録する。
+
+\begin{command}
+# P1で実行
+systemctl status lilypondnote-p1.service --no-pager -l
+systemctl is-enabled lilypondnote-p1.service
+sudo ss -ltnp | grep -E ':8000|:8001'
+\end{command}
+
+\section{P0のOSとネットワークを準備する}
+
+64-bit Raspberry Pi OS LiteまたはDebianを導入する。管理ユーザーの公開鍵SSHを設定し、
+パスワードだけのSSHログインは避ける。P0の固定IPを設定した後、P0で更新する。
+
+\begin{command}
+sudo apt update
+sudo apt full-upgrade
+sudo reboot
+\end{command}
+
+再接続後、アドレスとP1への経路を確認する。
+
+\begin{command}
+ip -br address
+ip route
+ping -c 3 192.168.30.10
+\end{command}
+
+この時点ではpingに応答しなくてもよいが、最終的にP0からP1のTCP 8000と8001へ到達できる
+ルーティングとACLが必要である。
+
+\section{P0にNginxを構築する}
+
+\subsection{導入と初期設定の保全}
+
+\begin{command}
+sudo apt install nginx
+nginx -v
+sudo cp -a /etc/nginx /etc/nginx.before-lilypondnote
+systemctl status nginx --no-pager -l
+\end{command}
+
+\subsection{P0用サイト設定を作る}
+
+P0で次のファイルを\texttt{/etc/nginx/sites-available/compile-services-p0}として作成する。
+ローカルDNSを設けないLAN内試験では、同じP0のIPアドレスを使い、TeXNoteはTCP 8080、
+LilyPondNoteはTCP 8081で入口を分ける。したがって\texttt{server\_name}による振分けには
+依存しない。
+TeX側は\texttt{/login}、\texttt{/me}、\texttt{/compile}だけを転送する。LilyPond側は
+これらに\texttt{/transpose}を加えた4パスだけを転送し、FastAPIの\texttt{/docs}や
+\texttt{/openapi.json}を公開しない。
+
+\begin{command}
+server {
+    listen 8080 default_server;
+    listen [::]:8080 default_server;
+    server_name _;
+    server_tokens off;
+    client_max_body_size 32m;
+    client_body_timeout 30s;
+    access_log /var/log/nginx/texnote-p0-access.log;
+    error_log  /var/log/nginx/texnote-p0-error.log;
+    location = /login {
+        proxy_pass http://192.168.30.10:8000;
+        include /etc/nginx/proxy_params;
+    }
+    location = /me {
+        proxy_pass http://192.168.30.10:8000;
+        include /etc/nginx/proxy_params;
+    }
+    location = /compile {
+        proxy_pass http://192.168.30.10:8000;
+        include /etc/nginx/proxy_params;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+    location / {
+        return 404;
+    }
+}
+
+server {
+    listen 8081 default_server;
+    listen [::]:8081 default_server;
+    server_name _;
+    server_tokens off;
+    client_max_body_size 8m;
+    client_body_timeout 30s;
+    access_log /var/log/nginx/lilypondnote-p0-access.log;
+    error_log  /var/log/nginx/lilypondnote-p0-error.log;
+    location = /login {
+        proxy_pass http://192.168.30.10:8001;
+        include /etc/nginx/proxy_params;
+    }
+    location = /me {
+        proxy_pass http://192.168.30.10:8001;
+        include /etc/nginx/proxy_params;
+    }
+    location = /compile {
+        proxy_pass http://192.168.30.10:8001;
+        include /etc/nginx/proxy_params;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+    location = /transpose {
+        proxy_pass http://192.168.30.10:8001;
+        include /etc/nginx/proxy_params;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+    }
+    location / {
+        return 404;
+    }
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+\end{command}
+
+TCP 80の最後のブロックは、ポート番号を省略した要求を認証APIへ流さず切断する。
+TeXNote側とLilyPondNote側の両方へ\texttt{listen 80}や
+\texttt{server\_name 192.168.3.22}を書いてはならない。同じIPアドレスとTCP 80の
+\texttt{server\_name}が競合し、一方の設定が無視されるためである。LAN内のクライアントは、
+TeXNoteに\texttt{http://192.168.3.22:8080}、LilyPondNoteに
+\texttt{http://192.168.3.22:8081}を設定する。
+
+\texttt{proxy\_pass}に末尾のスラッシュを付けず、クライアントから受け取った
+TeX側の3パスとLilyPond側の4パスをそのままP1へ渡す。P0は\texttt{/transpose}の
+本文を解釈・変換せず、認証も行わない。
+
+設定を有効化する。
+
+\begin{command}
+sudo ln -s /etc/nginx/sites-available/compile-services-p0 \
+  /etc/nginx/sites-enabled/compile-services-p0
+sudo unlink /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl reload nginx
+sudo systemctl enable nginx
+sudo ss -ltnp | grep -E ':80|:8080|:8081'
+\end{command}
+
+\texttt{nginx -t}に\texttt{conflicting server name}が表示されず、\texttt{ss}に
+TCP 8080と8081のNginx待受が表示されることを確認する。
+
+\section{P0にUFWを構築する}
+
+\subsection{許可規則を先に登録する}
+
+P0で実行する。管理LAN以外からSSHを許可しない。Mac、iPad、iPhoneが属する
+\texttt{192.168.3.0/24}からTCP 8080と8081を許可する。TCP 80は構築試験中だけ
+同じLANから許可する。TCP 443は公開サービスなので全送信元から許可する。
+
+\begin{command}
+sudo apt install ufw
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow from 192.168.3.0/24 to any port 22 proto tcp \
+  comment 'SSH from management network'
+sudo ufw allow from 192.168.3.0/24 to any port 80 proto tcp \
+  comment 'temporary HTTP test'
+sudo ufw allow from 192.168.3.0/24 to any port 8080 proto tcp \
+  comment 'TeXNote P0 LAN entry'
+sudo ufw allow from 192.168.3.0/24 to any port 8081 proto tcp \
+  comment 'LilyPondNote P0 LAN entry'
+sudo ufw allow 443/tcp comment 'LilyPondNote HTTPS'
+sudo ufw show added
+\end{command}
+
+表示されたSSH許可規則が正しいことを確認してから有効化する。
+
+\begin{command}
+sudo ufw enable
+sudo ufw status verbose
+sudo ufw status numbered
+\end{command}
+
+番号付き一覧に、\texttt{192.168.3.0/24}からTCP 8080と8081への\texttt{ALLOW IN}が
+各1行表示されることを確認する。Nginxが待ち受けていても、この二規則がなければMacからの
+接続はタイムアウトする。
+
+別ターミナルからP0へ新しくSSH接続する。成功するまで元のSSH接続を閉じない。
+
+\subsection{P0の送信制限について}
+
+上記の\texttt{default allow outgoing}では、P0自身のUFWは送信先を制限しない。
+そのため、VLANルーターまたはL3スイッチのACLで次を強制する。
+
+\begin{longtable}{@{}p{34mm}p{40mm}p{30mm}p{38mm}@{}}
+\toprule
+送信元 & 宛先 & ポート & 動作\\
+\midrule
+P0 & P1 & TCP 8000、8001 & 許可\\
+P0 & P2 & すべて & 拒否\\
+DMZ（P0） & 認証VLAN & TCP 8000、8001以外 & 拒否\\
+管理ネットワーク & P0 & TCP 22 & 許可\\
+Internet & P0 & TCP 443 & 許可\\
+Internet & P0/P1/P2 & 上記以外 & 拒否\\
+\bottomrule
+\end{longtable}
+
+OS更新に必要なP0からのDNS、NTP、HTTPSは、利用するルーターの仕様に合わせて許可する。
+ホスト側でも厳格な送信制限を行う場合は、DNSサーバー、NTPサーバー、更新先の扱いを
+決めてからUFWのoutgoing規則を変更する。未確認のまま\texttt{deny outgoing}にすると、
+名前解決、時刻同期、証明書更新を止める危険がある。
+
+\section{P1をP0からだけ受け付けるようにする}
+
+この節だけはP0ではなく\textbf{P1で実行する}。詳細はP1構築手順書に従う。
+TeX認証サービスはTCP 8000、LilyPond認証サービスはTCP 8001を使用する。
+
+\subsection{P1の待受を確認する}
+
+P1とP0が別サブネットの場合、P1は\texttt{127.0.0.1}ではなくP1の認証ネットワーク側
+固定IPで待ち受ける。二つのsystemdサービスを次のように設定する。
+
+\begin{command}
+# /etc/systemd/system/lilypondnote-p1.service のExecStart例
+# texnote-p1.service
+ExecStart=/opt/texnote/P1/.venv/bin/uvicorn main:app \
+  --host 192.168.30.10 --port 8000
+
+# lilypondnote-p1.service
+ExecStart=/opt/lilypondnote/P1/.venv/bin/uvicorn main:app \
+  --host 192.168.30.10 --port 8001
+\end{command}
+
+編集後に反映する。
+
+\begin{command}
+sudo systemctl daemon-reload
+sudo systemctl restart texnote-p1.service lilypondnote-p1.service
+systemctl status texnote-p1.service --no-pager -l
+systemctl status lilypondnote-p1.service --no-pager -l
+sudo ss -ltnp | grep -E ':8000|:8001'
+\end{command}
+
+\subsection{P1のUFWでP0だけを許可する}
+
+SSH許可を先に登録し、P0の固定IPからTCP 8000と8001への通信だけを許可する。
+
+\begin{command}
+sudo apt install ufw
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow from 192.168.3.0/24 to any port 22 proto tcp \
+  comment 'SSH from management network'
+sudo ufw allow from 192.168.3.22 to any port 8000 proto tcp \
+  comment 'P0 to TeX authentication'
+sudo ufw allow from 192.168.3.22 to any port 8001 proto tcp \
+  comment 'P0 to LilyPond authentication'
+sudo ufw show added
+sudo ufw enable
+sudo ufw status verbose
+\end{command}
+
+既にUFWが有効な場合は、\texttt{sudo ufw status numbered}で規則を確認する。
+TCP 8000または8001をLAN全体や全送信元へ許可する古い規則があれば、P0からの接続成功を
+確認した後、表示された番号を指定して削除する。
+
+\begin{command}
+sudo ufw status numbered
+sudo ufw delete <古い全面許可規則の番号>
+\end{command}
+
+P1からP2へのURLはサービス別に設定する。ここで使用する\texttt{192.168.40.10}は、
+「前提値と置換する値」で示したP2処理サーバーである。P2上のサービスは次の3個すべてを
+設定する。
+
+\begin{longtable}{@{}p{43mm}p{28mm}p{68mm}@{}}
+\toprule
+処理 & P2待受 & P1の環境変数\\
+\midrule
+TeX PDF生成 & TCP 8000 & \texttt{TEXNOTE\_P2\_TYPESET\_URL}\\
+LilyPond PDF生成 & TCP 8001 & \texttt{LILYPONDNOTE\_P2\_TYPESET\_URL}\\
+LilyPond移調テキスト生成 & TCP 8002 & \texttt{LILYPONDNOTE\_P2\_TRANSPOSE\_URL}\\
+\bottomrule
+\end{longtable}
+
+\begin{command}
+# /etc/texnote/p1.env
+TEXNOTE_P2_TYPESET_URL=http://192.168.40.10:8000/v1/typeset
+
+# /etc/lilypondnote/p1.env
+LILYPONDNOTE_P2_TYPESET_URL=http://192.168.40.10:8001/v1/typeset
+LILYPONDNOTE_P2_TRANSPOSE_URL=http://192.168.40.10:8002/v1/transpose
+\end{command}
+
+PDF生成APIの現行パスは\texttt{/v1/typeset}、移調テキストAPIは
+\texttt{/v1/transpose}である。TeX用P2内部トークンとLilyPond用P2内部トークンは別の値に
+する。LilyPondのPDFと移調は同じLilyPond認証を通るため、LilyPond用内部トークンを共有する。
+環境ファイルを変更した場合は該当するP1サービスを再起動する。
+
+\section{LAN内でP0経由を試験する}
+
+最初に、P0が各ポートの公開対象外パスを404にすることを管理端末から確認する。
+本書のP0固定IP \texttt{192.168.3.22}を使って確認する。
+
+\begin{command}
+curl -i http://192.168.3.22:8080/openapi.json
+curl -i http://192.168.3.22:8081/openapi.json
+\end{command}
+
+いずれもHTTP 404でなければ公開を進めない。次に両サービスへログインする。
+
+\begin{command}
+curl -sS -X POST http://192.168.3.22:8080/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"tex-user@example.com","password":"REPLACE_ME","service":"texnote"}'
+
+curl -sS -X POST http://192.168.3.22:8081/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"music-user@example.com","password":"REPLACE_ME","service":"lilypondnote"}'
+\end{command}
+
+各JWTは発行元サービスだけで使用する。TeX JWTをLilyPondへ、LilyPond JWTをTeXへ
+送った場合に認証が失敗することを確認する。トークンをシェル履歴へ残さない。
+
+\begin{command}
+TEX_TOKEN='TeXサービスから取得したaccess_token'
+curl -sS http://192.168.3.22:8080/me \
+  -H "Authorization: Bearer $TEX_TOKEN"
+\end{command}
+
+\texttt{/me}のJSONに\texttt{"service":"texnote"}が含まれることを確認する。
+LilyPondNote側はTCP 8081の\texttt{/me}が\texttt{"service":"lilypondnote"}を返す。
+また、TeXNoteのJSONをTCP 8081へ送る試験、およびLilyPondNoteのJSONをTCP 8080へ送る
+試験はHTTP 422となり、サービスを取り違えたログインが成立しないことを確認する。
+
+最後にTeXNoteのURLを\texttt{http://P0のIP:8080}、LilyPondNoteのURLを
+\texttt{http://P0のIP:8081}へ設定し、
+ログインと実際のコンパイルを確認する。
+問題がある場合は次のログを同時に調べる。
+
+\begin{command}
+# P0
+sudo tail -f /var/log/nginx/texnote-p0-access.log \
+  /var/log/nginx/lilypondnote-p0-access.log \
+  /var/log/nginx/texnote-p0-error.log \
+  /var/log/nginx/lilypondnote-p0-error.log
+
+# P1
+journalctl -u texnote-p1.service -f
+journalctl -u lilypondnote-p1.service -f
+\end{command}
+
+さらに、ネットワーク境界が設計どおりかを次の4方向から確認する。TCP接続試験には
+\texttt{nc}を使う。Raspberry Pi OSでコマンドがない場合は、試験するP0/P1へ
+\texttt{sudo apt install netcat-openbsd}を導入する。成功時は通常\texttt{succeeded}、
+拒否時は\texttt{refused}または\texttt{timed out}と表示される。
+
+\subsection{P0からP1の8000・8001へ接続できること}
+
+\textbf{P0で実行する。}P0から二つのP1認証APIへ到達できることを確認する。
+
+\begin{command}
+nc -vz -w 3 192.168.30.10 8000
+nc -vz -w 3 192.168.30.10 8001
+\end{command}
+
+両方が\texttt{succeeded}なら正常である。失敗する場合は、P1のsystemd待受IP、P1のUFW、
+P0--P1間のルーターACLを確認する。HTTPレベルも確認する場合は、P0から
+\texttt{curl -i http://192.168.30.10:8000/docs}等を実行し、200、401、404、405のいずれかが
+返ればTCP/HTTPは到達している。タイムアウトや接続拒否は未到達である。
+
+\subsection{P0からP2の8000・8001・8002へ直接接続できないこと}
+
+\textbf{P0で実行する。}P0はP1へだけ接続し、P2へ直接到達してはならない。
+
+\begin{command}
+nc -vz -w 3 192.168.40.10 8000
+nc -vz -w 3 192.168.40.10 8001
+nc -vz -w 3 192.168.40.10 8002
+\end{command}
+
+3個すべてが\texttt{refused}または\texttt{timed out}なら境界は正常である。一つでも
+\texttt{succeeded}なら、DMZから処理VLANへのルーターACLが広すぎるため、P0からP2への
+通信を拒否する。P2サービスを一時停止して「失敗」に見せるのではなく、P2が稼働中の状態で
+ACLによって遮断されることを確認する。
+
+\subsection{管理端末・一般LANからP1へ直接接続できないこと}
+
+\textbf{管理用Macまたは一般LAN端末で実行する。}P0を経由しないP1認証APIへの接続が
+遮断されることを確認する。SSH用管理VLANからの試験でも、8000・8001は許可しない。
+
+\begin{command}
+nc -vz -w 3 192.168.30.10 8000
+nc -vz -w 3 192.168.30.10 8001
+\end{command}
+
+両方が\texttt{refused}または\texttt{timed out}なら正常である。一つでも
+\texttt{succeeded}なら、P1のUFWにLAN全体または全送信元からの古い許可規則がないか
+\texttt{sudo ufw status numbered}で確認する。P1の8000・8001を許可する送信元はP0の固定IP
+\texttt{192.168.3.22}だけにする。
+
+\subsection{P1からP2の8000・8001・8002へ接続できること}
+
+\textbf{P1で実行する。}認証後の要求を全処理サービスへ送れることを確認する。
+
+\begin{command}
+nc -vz -w 3 192.168.40.10 8000
+nc -vz -w 3 192.168.40.10 8001
+nc -vz -w 3 192.168.40.10 8002
+\end{command}
+
+3個すべてが\texttt{succeeded}ならネットワーク到達性は正常である。失敗したポートがあれば、
+対応するP2サービスの待受、P2のUFW、認証VLANから処理VLANへのACLを確認する。これはTCP
+到達性だけの試験なので、続けて実際のTeX PDF生成、LilyPond PDF生成、移調テキスト生成を
+P0経由で行い、内部トークンとAPIパスも正しいことを確認する。
+
+\section{HTTPS証明書と外部公開}
+
+\subsection{公開前提}
+
+所有するドメインのDNSをP0へ到達するグローバルIPへ向ける。契約回線がCGNATの場合、
+通常のIPv4ポート転送は利用できないことがある。ルーターでインターネットから転送する
+のは次だけとする。
+
+\begin{command}
+Internet TCP 443 -> P0 192.168.3.22 TCP 443
+\end{command}
+
+TCP 22、80、8000、8001を恒常的に転送しない。HTTP-01方式で証明書を初回取得する場合は
+TCP 80が一時的に必要になることがある。その場合だけP0へ転送し、取得後に削除する。
+
+\subsection{Certbotで証明書を設定する}
+
+P0で実行する。ドメインは実際の値へ置き換える。
+
+\begin{command}
+sudo apt update
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d tex.example.com -d lilypond.example.com
+sudo nginx -t
+\end{command}
+
+Certbotが作成したNginx設定を確認し、HTTPからHTTPSへのリダイレクトとTCP 443の
+\texttt{ssl}待受が存在することを確認する。自動更新を試験する。
+
+\begin{command}
+systemctl status certbot.timer --no-pager
+sudo certbot renew --dry-run
+\end{command}
+
+証明書取得に一時許可したTCP 80を閉じる。ルーター側の一時転送も削除する。
+
+\begin{command}
+sudo ufw status numbered
+sudo ufw delete <temporary HTTP test規則の番号>
+sudo ufw status verbose
+\end{command}
+
+外部回線（携帯電話回線など、家庭内Wi-Fi以外）から確認する。
+
+\begin{command}
+curl -i https://tex.example.com/openapi.json
+curl -i https://lilypond.example.com/openapi.json
+\end{command}
+
+両方が404であることを確認する。TeXNoteは\path{https://tex.example.com}、
+LilyPondNoteは\path{https://lilypond.example.com}を最終URLにする。TLS証明書エラーを
+無視する設定はアプリにもP0にも追加しない。
+
+\section{再起動試験と完了チェックリスト}
+
+P0、P1、P2を一台ずつ再起動し、各回でログインとコンパイルが復旧することを確認する。
+
+\begin{command}
+# 各サーバーで該当サービスを確認
+systemctl is-enabled nginx
+systemctl is-active nginx
+sudo ufw status verbose
+\end{command}
+
+\begin{itemize}
+  \item[$\square$] P0にはNginx、TLS証明書、UFWだけがあり、両サービスの秘密値やDBがない。
+  \item[$\square$] P0はHTTPS TCP 443だけを外部公開している。
+  \item[$\square$] 二つのドメインをP1の別ポートへ正しく振り分ける。
+  \item[$\square$] LilyPond側だけが\texttt{/transpose}をP1へ転送する。
+  \item[$\square$] \texttt{/docs}、\texttt{/openapi.json}、その他のパスは404になる。
+  \item[$\square$] P1のTCP 8000と8001はP0の固定IPからだけ許可される。
+  \item[$\square$] P2のTCP 8000、8001、8002はP1の固定IPからだけ許可される。
+  \item[$\square$] P0からP2へ直接接続できない。
+  \item[$\square$] SSHは管理ネットワークからだけ許可される。
+  \item[$\square$] IPv6にも同等の制限があるか、サーバー側のグローバルIPv6が無効である。
+  \item[$\square$] Certbotの更新試験が成功する。
+  \item[$\square$] 各サーバーの再起動後にログインとコンパイルが復旧する。
+\end{itemize}
+
+\section{緊急停止}
+
+P0に問題が起きた場合は、まずルーターのTCP 443転送を停止して外部公開を止める。
+続いてNginxを停止する。P0はDBを持たないため、この操作でP1とP2のデータは変更されない。
+
+\begin{command}
+# P0
+sudo systemctl stop nginx
+\end{command}
+
+原因を確認してP0の設定を修正した後、\texttt{nginx -t}が成功してからNginxと
+ルーターのTCP 443転送を順に再開する。障害対応のためにP1を一般LANやインターネットへ
+直接公開してはならない。
+
+\section{まとめ}
+
+P0はP1の代替サーバーではなく、P1の前に置く小さな公開境界である。認証情報をP0へ
+移さず、LAN内ではTCP 8080と8081、外部公開では二つのドメインでサービスを振り分け、
+LilyPond側だけが移調パスを公開する。
+P1のUFWではP0の固定IPだけを許可する。
+さらにルーターまたはL3スイッチでP0からP2への直接通信を拒否することで、公開入口、
+認証、コンパイルの役割を明確に分離できる。
+
+\end{document}

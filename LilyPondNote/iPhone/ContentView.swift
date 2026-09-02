@@ -1,0 +1,967 @@
+// iPhone向けのPDF表示、楽譜選択、編集画面、ファイル操作UIを構成する。
+
+import PDFKit
+import SwiftUI
+import UniformTypeIdentifiers
+
+private extension UTType {
+    static let lilyPondSource = UTType(filenameExtension: "ly") ?? .plainText
+}
+
+struct ContentView: View {
+    @StateObject private var workspace = LilyPondNoteWorkspace(
+        compiler: RemoteLilyPondConfigurationStore.loadCompiler()
+    )
+    @State private var isEditing = false
+    @State private var isShowingServerSettings = false
+    @State private var currentPDFPage = 1
+    @State private var fileOperation: FileOperation?
+    @State private var isShowingFileImporter = false
+    @State private var isNamingRootScore = false
+    @State private var newRootTitle = ""
+    @State private var isSelectingScore = false
+    @State private var isShowingAbout = false
+    @State private var operationError = ""
+    @State private var isConfirmingScoreDeletion = false
+    @State private var isNamingPackage = false
+    @State private var packageName = ""
+    @State private var operationMessage = ""
+    @State private var isConfirmingNewNote = false
+    @State private var noteTitleDraft = String(localized: "名称未設定")
+    @State private var pendingOverwriteDestination: URL?
+    @State private var isConfirmingOverwrite = false
+    @State private var isConfirmingOpen = false
+    @State private var expandedScoreIDs: Set<UUID> = []
+    @FocusState private var isNoteTitleFocused: Bool
+
+    private enum FileOperation: Equatable {
+        case openPackage, importScore, savePackageAs, exportScore
+        var contentTypes: [UTType] { self == .importScore ? [.lilyPondSource] : [.folder] }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            noteTitleBar
+            Divider()
+            scoreTitleBar
+            Divider()
+            pdfContent
+        }
+        .background(.background)
+        .fullScreenCover(isPresented: $isEditing) {
+            iPhoneScoreEditorView(workspace: workspace)
+        }
+        .sheet(isPresented: $isShowingServerSettings) {
+            iPhoneServerSettingsView(workspace: workspace)
+        }
+        .sheet(isPresented: $isShowingAbout) {
+            LilyPondAboutView()
+                .presentationDetents([.height(350)])
+        }
+        .sheet(isPresented: $isSelectingScore) {
+            NavigationStack {
+                List(flattenedScores) { item in
+                    iPhoneCollapsibleScoreRow(
+                        item: item,
+                        expandedScoreIDs: $expandedScoreIDs
+                    ) {
+                        selectScore(item.score.id)
+                        isSelectingScore = false
+                    }
+                }
+                .navigationTitle("楽譜の選択")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("閉じる") { isSelectingScore = false }
+                    }
+                }
+            }
+        }
+        .fileImporter(
+            isPresented: $isShowingFileImporter,
+            allowedContentTypes: fileOperation?.contentTypes ?? [.folder]
+        ) { handleFileSelection($0) }
+        .alert("新しい楽譜グループ", isPresented: $isNamingRootScore) {
+            TextField("楽譜名", text: $newRootTitle)
+            Button("作成") { createRootScore() }
+            Button("キャンセル", role: .cancel) {}
+        }
+        .alert(newNoteConfirmationTitle, isPresented: $isConfirmingNewNote) {
+            Button("新しいNoteにする", role: .destructive) {
+                perform { try workspace.newNote() }
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text(newNoteConfirmationMessage)
+        }
+        .alert("操作できません", isPresented: Binding(
+            get: { !operationError.isEmpty },
+            set: { if !$0 { operationError = "" } }
+        )) { Button("OK") { operationError = "" } } message: { Text(operationError) }
+        .alert("楽譜を削除しますか？", isPresented: $isConfirmingScoreDeletion) {
+            Button("削除", role: .destructive) {
+                perform { try workspace.deleteSelectedScore() }
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text(String(
+                format: String(localized: "score.delete.message"),
+                workspace.selectedScore?.title ?? String(localized: "選択中の楽譜")
+            ))
+        }
+        .alert("Note名を入力", isPresented: $isNamingPackage) {
+            TextField("Note名", text: $packageName)
+            Button("次へ") { continueSaveAs() }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("保存するPackageの名前を入力してください。記号「/」と「:」は使用できません。")
+        }
+        .alert("同じ名前のNoteがあります", isPresented: $isConfirmingOverwrite) {
+            Button("上書き保存", role: .destructive) { overwritePendingPackage() }
+            Button("キャンセル", role: .cancel) {
+                pendingOverwriteDestination = nil
+            }
+        } message: {
+            Text(String(format: String(localized: "note.overwrite.message"), pendingOverwriteNoteName))
+        }
+        .alert("別のNoteを開きますか？", isPresented: $isConfirmingOpen) {
+            Button("開く") { beginFileOperation(.openPackage) }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("現在のNoteを閉じます。未保存の変更が必要な場合は、先に「保存…」を実行してください。")
+        }
+        .alert("保存しました", isPresented: Binding(
+            get: { !operationMessage.isEmpty },
+            set: { if !$0 { operationMessage = "" } }
+        )) {
+            Button("OK") { operationMessage = "" }
+        } message: {
+            Text(operationMessage)
+        }
+        .onAppear { noteTitleDraft = workspace.document.title }
+        .onChange(of: workspace.document.title) { _, title in noteTitleDraft = title }
+    }
+
+    private var noteTitleBar: some View {
+        ZStack {
+            TextField("Note名", text: $noteTitleDraft)
+                .font(.headline)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .lineLimit(1)
+                .focused($isNoteTitleFocused)
+                .onSubmit { renameNote() }
+                .onChange(of: isNoteTitleFocused) { _, focused in
+                    if !focused { renameNote() }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            HStack {
+                Button("新規作成", systemImage: "plus") {
+                    newRootTitle = ""
+                    isNamingRootScore = true
+                }
+                .labelStyle(.iconOnly)
+                Spacer()
+                if workspace.hasUnsavedChanges {
+                    Image(systemName: "circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("未保存の変更があります")
+                }
+                Menu {
+                    Button("新しいNote") { requestNewNote() }
+                    Button("開く…") { requestOpenPackage() }
+                    Button("保存…") { savePackage() }
+                    Button("名前を付けて保存…") {
+                        packageName = workspace.document.title
+                        isNamingPackage = true
+                    }
+                    Button("インポート") { beginFileOperation(.importScore) }
+                    Divider()
+                    Button("設定") { isShowingServerSettings = true }
+                    Button("LilyPondNoteについて", systemImage: "info.circle") {
+                        isShowingAbout = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .labelStyle(.iconOnly)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 58)
+        .background(.bar)
+    }
+
+    private var scoreTitleBar: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Button {
+                    isSelectingScore = true
+                } label: {
+                    Text(workspace.selectedScore?.title ?? String(localized: "楽譜がありません"))
+                }
+                    .font(.headline)
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(workspace.pdfNeedsRegeneration
+                         ? String(localized: "更新待ち")
+                         : String(localized: "最新版"))
+                        .foregroundStyle(workspace.pdfNeedsRegeneration ? .orange : .green)
+                    Text("\(currentPDFPage) / \(pageCount)")
+                        .foregroundStyle(.secondary)
+                    Text("LilyPond \(workspace.selectedScore?.compilerVersion ?? "—")")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption)
+            }
+            Spacer()
+            if workspace.selectedScore != nil {
+                Button("編集", systemImage: "pencil") { isEditing = true }
+                    .fixedSize()
+                Menu {
+                    Button("エクスポート") { beginFileOperation(.exportScore) }
+                    Button("削除", role: .destructive) {
+                        isConfirmingScoreDeletion = true
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 58)
+        .clipped()
+        .background(.bar)
+    }
+
+    @ViewBuilder
+    private var pdfContent: some View {
+        if let data = workspace.pdfData {
+            iPhonePDFView(
+                data: data,
+                currentPage: $currentPDFPage,
+                onVerticalSwipe: moveToAdjacentScoreGroup,
+                onLeadingEdgeSwipe: { isSelectingScore = true }
+            )
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(uiColor: .secondarySystemBackground))
+        } else {
+            ContentUnavailableView(
+                "PDFを表示できません",
+                systemImage: "doc.richtext",
+                description: Text(workspace.errorLog)
+            )
+        }
+    }
+
+    private var pageCount: Int {
+        guard let data = workspace.pdfData else { return 0 }
+        return PDFDocument(data: data)?.pageCount ?? 0
+    }
+
+    private var flattenedScores: [ScoreTreeItem] {
+        ScoreNavigation.visibleItems(
+            in: workspace.document.scores,
+            expandedScoreIDs: expandedScoreIDs
+        )
+    }
+
+    /// 必要なデータを作成して文書へ追加する。
+    private func createRootScore() {
+        let title = newRootTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        perform { try workspace.createRootScore(title: title) }
+    }
+
+    /// `renameNote`が担当する処理を実行する。
+    private func renameNote() {
+        do {
+            try workspace.renameNote(to: noteTitleDraft)
+            noteTitleDraft = workspace.document.title
+        } catch {
+            noteTitleDraft = workspace.document.title
+            operationError = error.localizedDescription
+        }
+    }
+
+    /// 対象の選択または表示位置を変更する。
+    private func selectScore(_ id: UUID) {
+        perform { try workspace.selectScore(id) }
+        currentPDFPage = 1
+    }
+
+    /// 対象の選択または表示位置を変更する。
+    private func moveToAdjacentScoreGroup(_ offset: Int) {
+        do {
+            let scores = flattenedScores
+            guard let targetID = ScoreNavigation.adjacentScoreID(
+                in: scores,
+                selectedScoreID: workspace.selectedScoreID,
+                fallbackRootID: workspace.selectedRootScore?.id,
+                offset: offset
+            ) else { return }
+            try workspace.selectScore(targetID)
+            currentPDFPage = 1
+        } catch {
+            operationError = error.localizedDescription
+        }
+    }
+
+    /// 対象データを保存先へ書き込む。
+    private func savePackage() {
+        if let destination = workspace.savedPackageURL {
+            let accessURLs = [destination.deletingLastPathComponent(), destination]
+            let accessedURLs = accessURLs.filter { $0.startAccessingSecurityScopedResource() }
+            defer { accessedURLs.reversed().forEach { $0.stopAccessingSecurityScopedResource() } }
+            do {
+                try workspace.savePackage()
+                operationMessage = destination.path
+            } catch {
+                operationError = error.localizedDescription
+            }
+        } else {
+            packageName = workspace.document.title
+            isNamingPackage = true
+        }
+    }
+
+    /// `continueSaveAs`が担当する処理を実行する。
+    private func continueSaveAs() {
+        do {
+            packageName = try workspace.validatedNoteName(packageName)
+            beginFileOperation(.savePackageAs)
+        } catch { operationError = error.localizedDescription }
+    }
+
+    /// 画面から要求された操作を処理する。
+    private func handleFileSelection(_ result: Result<URL, Error>) {
+        let operation = fileOperation
+        defer { fileOperation = nil }
+        do {
+            let url = try result.get()
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            switch operation {
+            case .openPackage: try workspace.openPackage(at: url)
+            case .importScore: try workspace.importRootScore(from: url)
+            case .savePackageAs:
+                let destination = url.appendingPathComponent(
+                    NoteFileUtilities.safeFileName(packageName) + ".lilypondnote",
+                    isDirectory: true
+                )
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    pendingOverwriteDestination = destination
+                    isConfirmingOverwrite = true
+                } else {
+                    try workspace.savePackageAs(
+                        to: destination,
+                        noteTitle: packageName
+                    )
+                    operationMessage = destination.path
+                }
+            case .exportScore:
+                try workspace.exportSelectedScore(
+                    to: NoteFileUtilities.exportURL(
+                        for: workspace.selectedScore?.title ?? "Score",
+                        in: url
+                    )
+                )
+            case nil: break
+            }
+            currentPDFPage = 1
+        } catch { operationError = error.localizedDescription }
+    }
+
+    /// 画面から要求された操作を処理する。
+    private func beginFileOperation(_ operation: FileOperation) {
+        fileOperation = operation
+        isShowingFileImporter = true
+    }
+
+    /// 画面から要求された操作を処理する。
+    private func requestOpenPackage() {
+        if workspace.document.scores.isEmpty || !workspace.hasUnsavedChanges {
+            beginFileOperation(.openPackage)
+        } else {
+            isConfirmingOpen = true
+        }
+    }
+
+    /// 画面から要求された操作を処理する。
+    private func requestNewNote() {
+        if workspace.document.scores.isEmpty {
+            perform { try workspace.newNote() }
+        } else {
+            isConfirmingNewNote = true
+        }
+    }
+
+    private var newNoteConfirmationTitle: String {
+        workspace.hasUnsavedChanges
+            ? String(localized: "未保存のNoteを白紙にしますか？")
+            : String(localized: "現在のNoteを白紙にしますか？")
+    }
+
+    private var newNoteConfirmationMessage: String {
+        workspace.hasUnsavedChanges
+            ? String(localized: "現在のNoteには未保存の変更があります。保存せずに閉じ、楽譜がない新しいNoteにします。")
+            : String(localized: "現在の保存済みNoteを閉じ、楽譜がない新しいNoteにします。")
+    }
+
+    private var pendingOverwriteNoteName: String {
+        pendingOverwriteDestination?.deletingPathExtension().lastPathComponent
+            ?? packageName
+    }
+
+    /// `overwritePendingPackage`が担当する処理を実行する。
+    private func overwritePendingPackage() {
+        guard let destination = pendingOverwriteDestination else { return }
+        pendingOverwriteDestination = nil
+        let parent = destination.deletingLastPathComponent()
+        let accessed = parent.startAccessingSecurityScopedResource()
+        defer { if accessed { parent.stopAccessingSecurityScopedResource() } }
+        do {
+            try workspace.savePackageAs(
+                to: destination,
+                noteTitle: packageName,
+                overwriteExisting: true
+            )
+            operationMessage = destination.path
+        } catch {
+            operationError = error.localizedDescription
+        }
+    }
+
+    /// 画面から要求された操作を処理する。
+    private func perform(_ action: () throws -> Void) {
+        do { try action() } catch { operationError = error.localizedDescription }
+    }
+}
+
+private struct iPhoneCollapsibleScoreRow: View {
+    let item: ScoreTreeItem
+    @Binding var expandedScoreIDs: Set<UUID>
+    var isSelected = false
+    let select: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if item.score.children.isEmpty {
+                Color.clear.frame(width: 22, height: 22)
+            } else {
+                Button {
+                    if expandedScoreIDs.contains(item.score.id) {
+                        expandedScoreIDs.remove(item.score.id)
+                    } else {
+                        expandedScoreIDs.insert(item.score.id)
+                    }
+                } label: {
+                    Image(systemName: expandedScoreIDs.contains(item.score.id)
+                          ? "chevron.down" : "chevron.right")
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+            }
+            Button(action: select) {
+                Label(
+                    item.score.title,
+                    systemImage: item.score.children.isEmpty ? "music.note" : "folder.fill"
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, CGFloat(item.depth) * 16)
+        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+    }
+}
+
+private struct iPhonePDFView: UIViewRepresentable {
+    let data: Data
+    @Binding var currentPage: Int
+    let onVerticalSwipe: (Int) -> Void
+    let onLeadingEdgeSwipe: () -> Void
+
+    /// 画面部品の構築または状態反映を行う。
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            displayedData: data,
+            currentPage: $currentPage,
+            onVerticalSwipe: onVerticalSwipe,
+            onLeadingEdgeSwipe: onLeadingEdgeSwipe
+        )
+    }
+
+    /// 画面部品の構築または状態反映を行う。
+    func makeUIView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.displayMode = .singlePage
+        view.displayDirection = .horizontal
+        view.usePageViewController(true, withViewOptions: [
+            UIPageViewController.OptionsKey.interPageSpacing: 12
+        ])
+        view.displaysPageBreaks = true
+        view.pageBreakMargins = .init(top: 12, left: 16, bottom: 12, right: 16)
+        view.backgroundColor = .secondarySystemBackground
+        view.document = PDFDocument(data: data)
+        fitDocument(in: view)
+        context.coordinator.observe(view)
+        context.coordinator.installSwipeRecognizers(on: view)
+        return view
+    }
+
+    /// 画面部品の構築または状態反映を行う。
+    func updateUIView(_ view: PDFView, context: Context) {
+        if context.coordinator.shouldDisplay(data) {
+            view.document = PDFDocument(data: data)
+            fitDocument(in: view)
+            Task { @MainActor in currentPage = 1 }
+        }
+    }
+
+    /// 画面部品の構築または状態反映を行う。
+    static func dismantleUIView(_ uiView: PDFView, coordinator: Coordinator) {
+        coordinator.stopObserving()
+    }
+
+    /// `fitDocument`が担当する処理を実行する。
+    private func fitDocument(in view: PDFView) {
+        view.autoScales = true
+        let scale = view.scaleFactorForSizeToFit
+        if scale > 0 {
+            view.scaleFactor = scale
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        private var currentPage: Binding<Int>
+        private var displayedData: Data
+        private let onVerticalSwipe: (Int) -> Void
+        private let onLeadingEdgeSwipe: () -> Void
+
+        /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+        init(
+            displayedData: Data,
+            currentPage: Binding<Int>,
+            onVerticalSwipe: @escaping (Int) -> Void,
+            onLeadingEdgeSwipe: @escaping () -> Void
+        ) {
+            self.displayedData = displayedData
+            self.currentPage = currentPage
+            self.onVerticalSwipe = onVerticalSwipe
+            self.onLeadingEdgeSwipe = onLeadingEdgeSwipe
+        }
+
+        /// `shouldDisplay`が担当する処理を実行する。
+        func shouldDisplay(_ data: Data) -> Bool {
+            guard displayedData != data else { return false }
+            displayedData = data
+            return true
+        }
+
+        /// `stopObserving`が担当する処理を実行する。
+        func stopObserving() {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        /// `installSwipeRecognizers`が担当する処理を実行する。
+        func installSwipeRecognizers(on view: PDFView) {
+            for direction in [UISwipeGestureRecognizer.Direction.up, .down, .right] {
+                let recognizer = UISwipeGestureRecognizer(
+                    target: self,
+                    action: #selector(didSwipe(_:))
+                )
+                recognizer.direction = direction
+                recognizer.delegate = self
+                view.addGestureRecognizer(recognizer)
+            }
+        }
+
+        /// `didSwipe`が担当する処理を実行する。
+        @objc private func didSwipe(_ recognizer: UISwipeGestureRecognizer) {
+            if recognizer.direction == .right {
+                if currentPage.wrappedValue == 1 { onLeadingEdgeSwipe() }
+            } else {
+                onVerticalSwipe(recognizer.direction == .up ? 1 : -1)
+            }
+        }
+
+        /// `gestureRecognizer`が担当する処理を実行する。
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool { true }
+        /// `observe`が担当する処理を実行する。
+        func observe(_ view: PDFView) {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(pageDidChange(_:)),
+                name: .PDFViewPageChanged,
+                object: view,
+            )
+        }
+
+        @MainActor
+        /// `pageDidChange`が担当する処理を実行する。
+        @objc private func pageDidChange(_ notification: Notification) {
+            guard let view = notification.object as? PDFView,
+                  let page = view.currentPage,
+                  let index = view.document?.index(for: page) else { return }
+            let pageNumber = index + 1
+            guard currentPage.wrappedValue != pageNumber else { return }
+            Task { @MainActor [currentPage] in
+                currentPage.wrappedValue = pageNumber
+            }
+        }
+    }
+}
+
+private struct iPhoneScoreEditorView: View {
+    enum Tab: String, CaseIterable, Identifiable {
+        case score = "楽譜"
+        case procedure = "処理手続き"
+        case error = "エラー表示"
+        var id: Self { self }
+    }
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var workspace: LilyPondNoteWorkspace
+    @State private var scoreSource: String
+    @State private var processingProgram: String
+    @State private var selectedTab: Tab = .score
+    @State private var saveError = ""
+    @State private var isNamingChild = false
+    @State private var childTitle = ""
+    @State private var isSelectingScore = false
+    @State private var isConfirmingDeletion = false
+    @State private var scoreTitleDraft: String
+    @FocusState private var isScoreTitleFocused: Bool
+    @State private var isShowingTransposeDialog = false
+    @State private var transposeTitle = String(localized: "移調した楽譜")
+    @State private var sourcePitch = "c"
+    @State private var destinationPitch = "a"
+    @State private var isTransposing = false
+    @State private var editorFontSize: Double
+    @State private var expandedScoreIDs: Set<UUID> = []
+
+    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    init(workspace: LilyPondNoteWorkspace) {
+        self.workspace = workspace
+        _scoreSource = State(initialValue: workspace.scoreSource)
+        _processingProgram = State(initialValue: workspace.processingProgram)
+        _scoreTitleDraft = State(initialValue: workspace.selectedScore?.title ?? "")
+        _editorFontSize = State(
+            initialValue: LilyPondEditorConfigurationStore.fontSize(defaultValue: 17)
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    TextField("楽譜名", text: $scoreTitleDraft)
+                        .font(.headline)
+                        .textFieldStyle(.plain)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .focused($isScoreTitleFocused)
+                        .onSubmit { renameScore() }
+                        .onChange(of: isScoreTitleFocused) { _, focused in
+                            if !focused { renameScore() }
+                        }
+                    Button("グループ内楽譜の選択", systemImage: "list.bullet.indent") {
+                        isSelectingScore = true
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.bordered)
+                }
+
+                HStack(spacing: 6) {
+                    Button("新規作成", systemImage: "plus") {
+                        childTitle = ""
+                        isNamingChild = true
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.bordered)
+                    Button("移調楽譜作成", systemImage: "music.note.list") {
+                        isShowingTransposeDialog = true
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.bordered)
+                    .disabled(isTransposing)
+                    Button("削除", systemImage: "trash", role: .destructive) {
+                        isConfirmingDeletion = true
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.bordered)
+                    Menu {
+                        Picker("文字サイズ", selection: $editorFontSize) {
+                            ForEach(LilyPondEditorConfigurationStore.availableFontSizes, id: \.self) { size in
+                                Text("\(Int(size)) pt").tag(size)
+                            }
+                        }
+                    } label: {
+                        Label("\(Int(editorFontSize))", systemImage: "textformat.size")
+                    }
+                    .buttonStyle(.bordered)
+                    .onChange(of: editorFontSize) { _, size in
+                        LilyPondEditorConfigurationStore.saveFontSize(size)
+                    }
+
+                    Spacer(minLength: 4)
+
+                    Button("保存", systemImage: "square.and.arrow.up") { save() }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.bordered)
+                    Button { generate() } label: {
+                        if workspace.isCompiling {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "play.fill")
+                        }
+                    }
+                    .accessibilityLabel("PDF生成")
+                    .buttonStyle(.borderedProminent)
+                    .disabled(workspace.isCompiling)
+                    Button("キャンセル", systemImage: "xmark") { dismiss() }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.bordered)
+                }
+                .controlSize(.small)
+            }
+            .padding(14)
+            .background(.bar)
+
+            Picker("編集項目", selection: $selectedTab) {
+                ForEach(Tab.allCases) { Text(LocalizedStringKey($0.rawValue)).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 12)
+
+            Divider()
+            editorBody.padding(10)
+        }
+        .background(.background)
+        .alert("下位楽譜を新規作成", isPresented: $isNamingChild) {
+            TextField("楽譜名", text: $childTitle)
+            Button("作成") { createChild() }
+            Button("キャンセル", role: .cancel) {}
+        }
+        .sheet(isPresented: $isSelectingScore) {
+            NavigationStack {
+                List {
+                    ForEach(flattenedScores) { item in
+                        iPhoneCollapsibleScoreRow(
+                            item: item,
+                            expandedScoreIDs: $expandedScoreIDs,
+                            isSelected: item.score.id == workspace.selectedScoreID
+                        ) {
+                            selectScore(item.score.id)
+                            isSelectingScore = false
+                        }
+                        .listRowBackground(item.score.id == workspace.selectedScoreID ? Color.accentColor.opacity(0.16) : Color.clear)
+                    }
+                    .onMove(perform: moveScoresWithinGroup)
+                }
+                .navigationTitle("グループ内楽譜の選択")
+            }
+        }
+        .alert("楽譜を削除しますか？", isPresented: $isConfirmingDeletion) {
+            Button("削除", role: .destructive) { deleteScore() }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text(String(
+                format: String(localized: "score.delete.message"),
+                workspace.selectedScore?.title ?? String(localized: "選択中の楽譜")
+            ))
+        }
+        .alert("移調楽譜を作成", isPresented: $isShowingTransposeDialog) {
+            TextField("子楽譜名", text: $transposeTitle)
+            TextField("移調元（例: c）", text: $sourcePitch)
+            TextField("移調先（例: a）", text: $destinationPitch)
+            Button("作成") { createTransposedChild() }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text(String(
+                format: String(localized: "transpose.create.message"),
+                RemoteLilyPondConfigurationStore.savedTransposeMode.displayName
+            ))
+        }
+    }
+
+    @ViewBuilder
+    private var editorBody: some View {
+        switch selectedTab {
+        case .score:
+            darkEditor(text: $scoreSource)
+        case .procedure:
+            darkEditor(text: $processingProgram)
+        case .error:
+            ScrollView {
+                Text(displayedError.isEmpty ? String(localized: "エラーはありません。") : displayedError)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+            }
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            .overlay { RoundedRectangle(cornerRadius: 10).stroke(.separator) }
+        }
+    }
+
+    private var displayedError: String {
+        saveError.isEmpty ? workspace.errorLog : saveError
+    }
+
+    /// `darkEditor`が担当する処理を実行する。
+    private func darkEditor(text: Binding<String>) -> some View {
+        iPhoneLilyPondSourceEditor(text: text, fontSize: editorFontSize)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            .overlay { RoundedRectangle(cornerRadius: 10).stroke(.separator) }
+    }
+
+    /// 対象データを保存先へ書き込む。
+    private func save() {
+        do {
+            try workspace.saveScore(scoreSource: scoreSource, processingProgram: processingProgram)
+            saveError = ""
+        } catch {
+            saveError = error.localizedDescription
+            selectedTab = .error
+        }
+    }
+
+    /// 入力を処理して生成結果を返す。
+    private func generate() {
+        Task {
+            let succeeded = await workspace.generatePDF(
+                scoreSource: scoreSource,
+                processingProgram: processingProgram
+            )
+            if !succeeded { selectedTab = .error }
+        }
+    }
+
+    private var flattenedScores: [ScoreTreeItem] {
+        guard let root = workspace.selectedRootScore else { return [] }
+        return ScoreNavigation.visibleItems(
+            in: [root],
+            expandedScoreIDs: expandedScoreIDs
+        )
+    }
+
+    /// 対象の選択または表示位置を変更する。
+    private func moveScoresWithinGroup(from source: IndexSet, to destination: Int) {
+        guard let move = ScoreNavigation.siblingMove(
+            in: workspace.document,
+            items: flattenedScores,
+            source: source,
+            destination: destination
+        ) else { return }
+        do {
+            try workspace.moveScoresWithinGroup(
+                parentID: move.parentID,
+                fromOffsets: move.source,
+                toOffset: move.destination
+            )
+        } catch { show(error) }
+    }
+
+    /// 必要なデータを作成して文書へ追加する。
+    private func createChild() {
+        let title = childTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        Task {
+            do {
+                try await ScoreDerivationService.create(
+                    kind: .new,
+                    title: title,
+                    scoreSource: scoreSource,
+                    processingProgram: processingProgram,
+                    sourcePitch: "",
+                    destinationPitch: "",
+                    workspace: workspace
+                )
+                reloadEditor()
+            } catch { show(error) }
+        }
+    }
+
+    /// 必要なデータを作成して文書へ追加する。
+    private func createTransposedChild() {
+        let title = transposeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = sourcePitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let destination = destinationPitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, !source.isEmpty, !destination.isEmpty else {
+            saveError = String(localized: "子楽譜名、移調元、移調先を入力してください。")
+            selectedTab = .error
+            return
+        }
+
+        isTransposing = true
+        Task {
+            defer { isTransposing = false }
+            do {
+                try await ScoreDerivationService.create(
+                    kind: .transpose,
+                    title: title,
+                    scoreSource: scoreSource,
+                    processingProgram: processingProgram,
+                    sourcePitch: source,
+                    destinationPitch: destination,
+                    workspace: workspace
+                )
+                reloadEditor()
+            } catch {
+                show(error)
+            }
+        }
+    }
+
+    /// 対象データまたは保持状態を削除する。
+    private func deleteScore() {
+        do {
+            try workspace.deleteSelectedScore()
+            dismiss()
+        } catch { show(error) }
+    }
+
+    /// 対象の選択または表示位置を変更する。
+    private func selectScore(_ id: UUID) {
+        do {
+            try workspace.selectScore(id)
+            reloadEditor()
+        } catch { show(error) }
+    }
+
+    /// `reloadEditor`が担当する処理を実行する。
+    private func reloadEditor() {
+        scoreSource = workspace.scoreSource
+        processingProgram = workspace.processingProgram
+        scoreTitleDraft = workspace.selectedScore?.title ?? ""
+        saveError = ""
+    }
+
+    /// `renameScore`が担当する処理を実行する。
+    private func renameScore() {
+        do {
+            try workspace.renameSelectedScore(to: scoreTitleDraft)
+            scoreTitleDraft = workspace.selectedScore?.title ?? ""
+            saveError = ""
+        } catch {
+            scoreTitleDraft = workspace.selectedScore?.title ?? ""
+            show(error)
+        }
+    }
+
+    /// 画面から要求された操作を処理する。
+    private func show(_ error: Error) {
+        saveError = error.localizedDescription
+        selectedTab = .error
+    }
+}

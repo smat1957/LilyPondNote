@@ -1,0 +1,28 @@
+[Unit]
+Description=LilyPondNote P2 typesetting server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lilypondnote-p2
+Group=lilypondnote-p2
+WorkingDirectory=/opt/lilypondnote/P2
+EnvironmentFile=/etc/lilypondnote/p2.env
+ExecStart=/opt/lilypondnote/P2/.venv/bin/uvicorn app:app --host 192.168.40.10 --port 8001
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

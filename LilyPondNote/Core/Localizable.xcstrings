@@ -404,13 +404,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ does not include score.ly from the same Score."
+            "value" : "Add \\include \"score.ly\" to the processing procedure (%@). Each score must include its own score.ly file."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@が同じScoreのscore.lyをincludeしていません。"
+            "value" : "処理手続き（%@）に \\include \"score.ly\" を追加してください。各楽譜は、同じ楽譜フォルダのscore.lyを読み込む必要があります。"
           }
         }
       }

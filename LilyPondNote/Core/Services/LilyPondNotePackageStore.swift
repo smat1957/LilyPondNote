@@ -152,8 +152,14 @@ struct LilyPondNotePackageStore {
             at: fileSet.childrenDirectoryURL,
             withIntermediateDirectories: true
         )
-        try writeScoreData(scoreData, to: fileSet)
-        try writeProcessingProgram(processingProgram, to: fileSet)
+        do {
+            try writeScoreData(scoreData, to: fileSet)
+            try writeProcessingProgram(processingProgram, to: fileSet)
+        } catch {
+            // 文書へ未登録の不完全な楽譜フォルダをPackage内に残さない。
+            try? fileManager.removeItem(at: fileSet.directoryURL)
+            throw error
+        }
         return fileSet
     }
 

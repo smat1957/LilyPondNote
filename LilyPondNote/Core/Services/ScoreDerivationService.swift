@@ -19,7 +19,11 @@ enum ScoreDerivationService {
         switch kind {
         case .new:
             try workspace.saveScore(scoreSource: scoreSource, processingProgram: processingProgram)
-            try workspace.createChildScore(title: title, scoreSource: LilyPondTemplates.simpleDerivedScore, processingProgram: "")
+            try workspace.createChildScore(
+                title: title,
+                scoreSource: LilyPondTemplates.initialScoreData,
+                processingProgram: LilyPondTemplates.initialProcessingProgram
+            )
         case .duplicate:
             try workspace.saveScore(scoreSource: scoreSource, processingProgram: processingProgram)
             try workspace.createChildScore(title: title, scoreSource: scoreSource, processingProgram: processingProgram)

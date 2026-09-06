@@ -170,17 +170,33 @@ struct ContentView: View {
     }
 
     private var scoreSidebar: some View {
-        List {
-            ForEach(workspace.document.scores) { score in
-                iPadScoreTreeRow(
-                    score: score,
-                    selectedScoreID: workspace.selectedScoreID,
-                    expandedScoreIDs: $expandedScoreIDs,
-                    select: selectScore,
-                    moveChildren: moveChildScores
-                )
+        VStack(spacing: 0) {
+            List {
+                ForEach(workspace.document.scores) { score in
+                    iPadScoreTreeRow(
+                        score: score,
+                        selectedScoreID: workspace.selectedScoreID,
+                        expandedScoreIDs: $expandedScoreIDs,
+                        select: selectScore,
+                        moveChildren: moveChildScores
+                    )
+                }
+                .onMove(perform: moveRootScores)
             }
-            .onMove(perform: moveRootScores)
+            Divider()
+            HStack {
+                Button("新規作成", systemImage: "plus") {
+                    newRootTitle = ""
+                    isNamingRootScore = true
+                }
+                Spacer()
+                Button("インポート", systemImage: "square.and.arrow.down.on.square") {
+                    beginFileOperation(.importScore)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.bar)
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
@@ -345,10 +361,6 @@ struct ContentView: View {
                         .foregroundStyle(.orange)
                         .labelStyle(.titleAndIcon)
                 }
-                Button("新規作成", systemImage: "plus") {
-                    newRootTitle = ""
-                    isNamingRootScore = true
-                }
                 Menu {
                     Button("新しいNote", systemImage: "doc.badge.plus") {
                         requestNewNote()
@@ -363,9 +375,6 @@ struct ContentView: View {
                     Button("名前を付けて保存…", systemImage: "square.and.pencil") {
                         packageName = workspace.document.title
                         isNamingPackage = true
-                    }
-                    Button("インポート", systemImage: "square.and.arrow.down.on.square") {
-                        beginFileOperation(.importScore)
                     }
                     Divider()
                     Button("設定", systemImage: "gearshape") {

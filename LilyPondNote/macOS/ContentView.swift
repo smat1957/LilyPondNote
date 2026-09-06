@@ -43,17 +43,33 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            List {
-                ForEach(workspace.document.scores) { score in
-                    macOSScoreTreeRow(
-                        score: score,
-                        selectedScoreID: workspace.selectedScoreID,
-                        expandedScoreIDs: $expandedScoreIDs,
-                        select: selectScore,
-                        moveChildren: moveChildScores
-                    )
+            VStack(spacing: 0) {
+                List {
+                    ForEach(workspace.document.scores) { score in
+                        macOSScoreTreeRow(
+                            score: score,
+                            selectedScoreID: workspace.selectedScoreID,
+                            expandedScoreIDs: $expandedScoreIDs,
+                            select: selectScore,
+                            moveChildren: moveChildScores
+                        )
+                    }
+                    .onMove(perform: moveRootScores)
                 }
-                .onMove(perform: moveRootScores)
+                Divider()
+                HStack {
+                    Button("新規作成", systemImage: "plus") {
+                        newRootTitle = ""
+                        isNamingRootScore = true
+                    }
+                    Spacer()
+                    Button("インポート", systemImage: "square.and.arrow.down.on.square") {
+                        beginFileOperation(.importScore)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.bar)
             }
             .navigationTitle(workspace.document.title)
             .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 310)
@@ -174,10 +190,6 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
-                Button("新規作成", systemImage: "plus") {
-                    newRootTitle = ""
-                    isNamingRootScore = true
-                }
                 Menu {
                     Button("新しいNote") { requestNewNote() }
                     Button("開く…") { requestOpenPackage() }
@@ -189,7 +201,6 @@ struct ContentView: View {
                         packageName = workspace.document.title
                         isNamingPackage = true
                     }
-                    Button("インポート") { beginFileOperation(.importScore) }
                     Divider()
                     Button("サービス設定") { isShowingServerSettings = true }
                     Button("LilyPondNoteについて", systemImage: "info.circle") {

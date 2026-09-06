@@ -8,5 +8,6 @@ struct LilyPondNoteApp: App {
         WindowGroup {
             ContentView()
         }
+        .windowStyle(.hiddenTitleBar)
     }
 }

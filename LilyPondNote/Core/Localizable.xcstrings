@@ -449,17 +449,6 @@
         }
       }
     },
-    "Packageの保存先が選択されていません。" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No Package save location is selected."
-          }
-        }
-      }
-    },
     "PDFを生成できませんでした。" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1521,6 +1510,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Settings"
+          }
+        }
+      }
+    },
+    "印刷" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Print"
           }
         }
       }

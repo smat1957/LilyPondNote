@@ -49,7 +49,8 @@ struct ContentView: View {
                         score: score,
                         selectedScoreID: workspace.selectedScoreID,
                         expandedScoreIDs: $expandedScoreIDs,
-                        select: selectScore
+                        select: selectScore,
+                        moveChildren: moveChildScores
                     )
                 }
                 .onMove(perform: moveRootScores)
@@ -180,7 +181,10 @@ struct ContentView: View {
                 Menu {
                     Button("新しいNote") { requestNewNote() }
                     Button("開く…") { requestOpenPackage() }
-                    Button("保存…") { savePackage() }
+                    Button("保存…") {
+                        packageName = workspace.document.title
+                        continueSaveAs()
+                    }
                     Button("名前を付けて保存…") {
                         packageName = workspace.document.title
                         isNamingPackage = true
@@ -235,7 +239,12 @@ struct ContentView: View {
                         .fixedSize()
                         .buttonStyle(.borderless)
                     Menu {
-                        Button("エクスポート") { beginFileOperation(.exportScore) }
+                        Button("印刷", systemImage: "printer") { printPDF() }
+                            .disabled(workspace.pdfData == nil)
+                        Button("エクスポート", systemImage: "square.and.arrow.up") {
+                            beginFileOperation(.exportScore)
+                        }
+                        Divider()
                         Button("削除", role: .destructive) {
                             isConfirmingScoreDeletion = true
                         }
@@ -273,6 +282,18 @@ struct ContentView: View {
     private var pageCount: Int {
         guard let data = workspace.pdfData else { return 0 }
         return PDFDocument(data: data)?.pageCount ?? 0
+    }
+
+    /// 現在表示中のPDF全ページをmacOS標準の印刷ダイアログへ渡す。
+    private func printPDF() {
+        guard let data = workspace.pdfData,
+              let document = PDFDocument(data: data),
+              let operation = document.printOperation(
+                  for: NSPrintInfo.shared,
+                  scalingMode: .pageScaleToFit,
+                  autoRotate: true
+              ) else { return }
+        operation.run()
     }
 
     /// 必要なデータを作成して文書へ追加する。
@@ -366,21 +387,14 @@ struct ContentView: View {
         }
     }
 
-    /// 対象データを保存先へ書き込む。
-    private func savePackage() {
-        if let destination = workspace.savedPackageURL {
-            let accessURLs = [destination.deletingLastPathComponent(), destination]
-            let accessedURLs = accessURLs.filter { $0.startAccessingSecurityScopedResource() }
-            defer { accessedURLs.reversed().forEach { $0.stopAccessingSecurityScopedResource() } }
-            do {
-                try workspace.savePackage()
-                operationMessage = destination.path
-            } catch {
-                operationError = error.localizedDescription
-            }
-        } else {
-            packageName = workspace.document.title
-            isNamingPackage = true
+    /// 同じ親を持つ子楽譜の表示順を変更する。
+    private func moveChildScores(parentID: UUID, from source: IndexSet, to destination: Int) {
+        perform {
+            try workspace.moveScoresWithinGroup(
+                parentID: parentID,
+                fromOffsets: source,
+                toOffset: destination
+            )
         }
     }
 
@@ -565,6 +579,7 @@ private struct macOSScoreTreeRow: View {
     let selectedScoreID: UUID?
     @Binding var expandedScoreIDs: Set<UUID>
     let select: (UUID) -> Void
+    let moveChildren: (UUID, IndexSet, Int) -> Void
     var body: some View {
         if score.children.isEmpty {
             scoreButton
@@ -581,8 +596,12 @@ private struct macOSScoreTreeRow: View {
                         score: $0,
                         selectedScoreID: selectedScoreID,
                         expandedScoreIDs: $expandedScoreIDs,
-                        select: select
+                        select: select,
+                        moveChildren: moveChildren
                     )
+                }
+                .onMove { source, destination in
+                    moveChildren(score.id, source, destination)
                 }
             } label: {
                 scoreButton

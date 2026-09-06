@@ -42,4 +42,9 @@ uvicorn transpose_app:app --host 192.168.40.10 --port 8002
 ファイアウォールでP1のIPアドレスからだけ許可してください。
 移調APIは`LilyPond_transpose/python/main.py`を隔離して実行し、移調後の
 `transposedSource`だけを返します。LilyPondを実行せず、PDFを生成しません。
+移調元・移調先には`d'`や`c,`のようなオクターブ指示を指定できます。JSONでは
+アポストロフィーをエスケープせず、ASCIIの`'`をそのまま送ります。`'`は1個につき
+1オクターブ上、`,`は1個につき1オクターブ下です。両者を混在させた`d',`は拒否されます。
+LilyPondNoteアプリはスマート引用符をASCIIへ正規化しますが、APIを直接呼ぶ場合は
+ASCIIアポストロフィーを使用してください。
 P1の`usage.service`にはPDF生成を`typeset`、移調を`transpose`として記録します。

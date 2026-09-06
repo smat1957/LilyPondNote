@@ -288,25 +288,6 @@ final class LilyPondNoteWorkspace: ObservableObject {
     }
 
     /// 対象データを保存先へ書き込む。
-    func savePackage(to destinationURL: URL? = nil) throws {
-        let destination = destinationURL ?? savedPackageURL
-        guard let destination else { throw WorkspaceError.packageURLIsNotSet }
-        try store.saveMetadata(for: document, at: workingPackageURL)
-        try store.savePortablePackage(
-            for: document,
-            from: workingPackageURL,
-            to: destination,
-            overwriteExisting: true
-        )
-        savedPackageURL = destination
-        hasUnsavedChanges = false
-        try PackageBookmarkStore.save(
-            packageURL: destination,
-            accessRootURL: destination.deletingLastPathComponent()
-        )
-    }
-
-    /// 対象データを保存先へ書き込む。
     func savePackageAs(
         to destinationURL: URL,
         noteTitle: String,
@@ -398,20 +379,25 @@ final class LilyPondNoteWorkspace: ObservableObject {
                 try createEmptyInitialNote()
                 return
             }
-            guard fileManager.fileExists(atPath: resolved.packageURL.path) else {
-                PackageBookmarkStore.clear()
-                try createEmptyInitialNote()
-                return
-            }
             let accessURLs = [resolved.accessRootURL, resolved.packageURL]
             var accessedURLs: [URL] = []
-            for url in accessURLs where url.startAccessingSecurityScopedResource() {
-                accessedURLs.append(url)
+            var accessedPaths: Set<String> = []
+            for url in accessURLs {
+                let path = url.standardizedFileURL.path
+                guard accessedPaths.insert(path).inserted else { continue }
+                if url.startAccessingSecurityScopedResource() {
+                    accessedURLs.append(url)
+                }
             }
             defer {
                 for url in accessedURLs.reversed() {
                     url.stopAccessingSecurityScopedResource()
                 }
+            }
+            guard fileManager.fileExists(atPath: resolved.packageURL.path) else {
+                PackageBookmarkStore.clear()
+                try createEmptyInitialNote()
+                return
             }
             try loadPackage(at: resolved.packageURL)
         } catch {
@@ -480,7 +466,6 @@ extension LilyPondNoteWorkspace {
     enum WorkspaceError: LocalizedError {
         case scoreIsNotSelected
         case scoreNotFound(UUID)
-        case packageURLIsNotSet
         case invalidNoteName
         case invalidScoreName
 
@@ -490,8 +475,6 @@ extension LilyPondNoteWorkspace {
                 String(localized: "楽譜が選択されていません。")
             case .scoreNotFound(let id):
                 String(format: String(localized: "workspace.scoreNotFound"), id.uuidString)
-            case .packageURLIsNotSet:
-                String(localized: "Packageの保存先が選択されていません。")
             case .invalidNoteName:
                 String(localized: "Note名を入力してください。記号「/」と「:」は使用できません。")
             case .invalidScoreName:

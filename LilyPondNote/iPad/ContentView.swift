@@ -3,6 +3,7 @@
 import PDFKit
 import LilyPondTransposeCore
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 private extension UTType {
@@ -175,7 +176,8 @@ struct ContentView: View {
                     score: score,
                     selectedScoreID: workspace.selectedScoreID,
                     expandedScoreIDs: $expandedScoreIDs,
-                    select: selectScore
+                    select: selectScore,
+                    moveChildren: moveChildScores
                 )
             }
             .onMove(perform: moveRootScores)
@@ -355,7 +357,8 @@ struct ContentView: View {
                         requestOpenPackage()
                     }
                     Button("保存…", systemImage: "square.and.arrow.up") {
-                        savePackage()
+                        packageName = workspace.document.title
+                        continueSaveAs()
                     }
                     Button("名前を付けて保存…", systemImage: "square.and.pencil") {
                         packageName = workspace.document.title
@@ -414,9 +417,14 @@ struct ContentView: View {
                     Button("編集", systemImage: "pencil") { isEditing = true }
                         .fixedSize()
                     Menu {
+                        Button("印刷", systemImage: "printer") {
+                            printPDF()
+                        }
+                        .disabled(workspace.pdfData == nil)
                         Button("エクスポート", systemImage: "square.and.arrow.up") {
                             beginFileOperation(.exportScore)
                         }
+                        Divider()
                         Button("削除", systemImage: "trash", role: .destructive) {
                             isConfirmingScoreDeletion = true
                         }
@@ -442,6 +450,10 @@ struct ContentView: View {
                 onLeadingEdgeSwipe: {
                     withAnimation(.easeOut(duration: 0.22)) {
                         splitViewVisibility = .all
+                        if let selectedScore = workspace.selectedScore,
+                           !selectedScore.children.isEmpty {
+                            expandedScoreIDs.insert(selectedScore.id)
+                        }
                     }
                 },
                 onTap: {
@@ -468,6 +480,19 @@ struct ContentView: View {
     private var pageCount: Int {
         guard let data = workspace.pdfData else { return 0 }
         return PDFDocument(data: data)?.pageCount ?? 0
+    }
+
+    /// 現在表示中のPDF全ページをiPadOS標準の印刷画面へ渡す。
+    private func printPDF() {
+        guard let data = workspace.pdfData else { return }
+        let printInfo = UIPrintInfo(dictionary: nil)
+        printInfo.jobName = workspace.selectedScore?.title ?? workspace.document.title
+        printInfo.outputType = .general
+
+        let controller = UIPrintInteractionController.shared
+        controller.printInfo = printInfo
+        controller.printingItem = data
+        controller.present(animated: true, completionHandler: nil)
     }
 
     /// 必要なデータを作成して文書へ追加する。
@@ -504,6 +529,17 @@ struct ContentView: View {
         }
     }
 
+    /// 同じ親を持つ子楽譜の表示順を変更する。
+    private func moveChildScores(parentID: UUID, from source: IndexSet, to destination: Int) {
+        perform {
+            try workspace.moveScoresWithinGroup(
+                parentID: parentID,
+                fromOffsets: source,
+                toOffset: destination
+            )
+        }
+    }
+
     /// 対象の選択または表示位置を変更する。
     private func moveToAdjacentScoreGroup(_ offset: Int) {
         do {
@@ -534,24 +570,6 @@ struct ContentView: View {
             insertion: .move(edge: insertion).combined(with: .opacity),
             removal: .move(edge: removal).combined(with: .opacity)
         )
-    }
-
-    /// 対象データを保存先へ書き込む。
-    private func savePackage() {
-        if let destination = workspace.savedPackageURL {
-            let accessURLs = [destination.deletingLastPathComponent(), destination]
-            let accessedURLs = accessURLs.filter { $0.startAccessingSecurityScopedResource() }
-            defer { accessedURLs.reversed().forEach { $0.stopAccessingSecurityScopedResource() } }
-            do {
-                try workspace.savePackage()
-                operationMessage = destination.path
-            } catch {
-                operationError = error.localizedDescription
-            }
-        } else {
-            packageName = workspace.document.title
-            isNamingPackage = true
-        }
     }
 
     /// `continueSaveAs`が担当する処理を実行する。
@@ -699,6 +717,7 @@ private struct iPadScoreTreeRow: View {
     let selectedScoreID: UUID?
     @Binding var expandedScoreIDs: Set<UUID>
     let select: (UUID) -> Void
+    let moveChildren: (UUID, IndexSet, Int) -> Void
 
     var body: some View {
         if score.children.isEmpty {
@@ -719,8 +738,12 @@ private struct iPadScoreTreeRow: View {
                         score: child,
                         selectedScoreID: selectedScoreID,
                         expandedScoreIDs: $expandedScoreIDs,
-                        select: select
+                        select: select,
+                        moveChildren: moveChildren
                     )
+                }
+                .onMove { source, destination in
+                    moveChildren(score.id, source, destination)
                 }
             } label: {
                 scoreButton

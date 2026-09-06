@@ -50,9 +50,9 @@ LilyPondNote/
 
 ## Note Package
 
-「名前を付けて保存」では、選択した保存先の中にNote名と同じ名前の
-`.lilypondnote` Packageを作成します。「保存」では、現在開いているPackageを
-その場所で上書き更新します。
+「保存」では保存先フォルダを選び、その中に現在のNote名と同じ名前の
+`.lilypondnote` Packageを作成します。「名前を付けて保存」では、新しいNote名を
+入力してから保存先フォルダを選び、同じ形式のPackageを作成します。
 
 ```text
 Note名.lilypondnote/

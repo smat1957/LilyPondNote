@@ -2,6 +2,7 @@
 
 import PDFKit
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 private extension UTType {
@@ -173,7 +174,10 @@ struct ContentView: View {
                 Menu {
                     Button("新しいNote") { requestNewNote() }
                     Button("開く…") { requestOpenPackage() }
-                    Button("保存…") { savePackage() }
+                    Button("保存…") {
+                        packageName = workspace.document.title
+                        continueSaveAs()
+                    }
                     Button("名前を付けて保存…") {
                         packageName = workspace.document.title
                         isNamingPackage = true
@@ -222,7 +226,12 @@ struct ContentView: View {
                 Button("編集", systemImage: "pencil") { isEditing = true }
                     .fixedSize()
                 Menu {
-                    Button("エクスポート") { beginFileOperation(.exportScore) }
+                    Button("印刷", systemImage: "printer") { printPDF() }
+                        .disabled(workspace.pdfData == nil)
+                    Button("エクスポート", systemImage: "square.and.arrow.up") {
+                        beginFileOperation(.exportScore)
+                    }
+                    Divider()
                     Button("削除", role: .destructive) {
                         isConfirmingScoreDeletion = true
                     }
@@ -259,6 +268,19 @@ struct ContentView: View {
     private var pageCount: Int {
         guard let data = workspace.pdfData else { return 0 }
         return PDFDocument(data: data)?.pageCount ?? 0
+    }
+
+    /// 現在表示中のPDF全ページをiOS標準の印刷画面へ渡す。
+    private func printPDF() {
+        guard let data = workspace.pdfData else { return }
+        let printInfo = UIPrintInfo(dictionary: nil)
+        printInfo.jobName = workspace.selectedScore?.title ?? workspace.document.title
+        printInfo.outputType = .general
+
+        let controller = UIPrintInteractionController.shared
+        controller.printInfo = printInfo
+        controller.printingItem = data
+        controller.present(animated: true, completionHandler: nil)
     }
 
     private var flattenedScores: [ScoreTreeItem] {
@@ -306,24 +328,6 @@ struct ContentView: View {
             currentPDFPage = 1
         } catch {
             operationError = error.localizedDescription
-        }
-    }
-
-    /// 対象データを保存先へ書き込む。
-    private func savePackage() {
-        if let destination = workspace.savedPackageURL {
-            let accessURLs = [destination.deletingLastPathComponent(), destination]
-            let accessedURLs = accessURLs.filter { $0.startAccessingSecurityScopedResource() }
-            defer { accessedURLs.reversed().forEach { $0.stopAccessingSecurityScopedResource() } }
-            do {
-                try workspace.savePackage()
-                operationMessage = destination.path
-            } catch {
-                operationError = error.localizedDescription
-            }
-        } else {
-            packageName = workspace.document.title
-            isNamingPackage = true
         }
     }
 

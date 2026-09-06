@@ -12,7 +12,7 @@ import resource
 import subprocess
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -35,16 +35,13 @@ MAX_ERROR_CHARACTERS = 4_000
 TIMEOUT_SECONDS = 10
 slots = asyncio.Semaphore(2)
 
-# CLIが理解するLilyPond音名だけをAPIでも受け付ける。
-PitchName = Literal[
-    "ces", "c", "cis", "cisis", "ceses",
-    "des", "d", "dis", "disis", "deses",
-    "ees", "es", "e", "eis", "eisis", "eeses",
-    "fes", "f", "fis", "fisis", "feses",
-    "ges", "g", "gis", "gisis", "geses",
-    "ases", "as", "a", "ais", "aisis", "aseses",
-    "beses", "bes", "b", "bis",
-]
+# CLIが理解する音名に、同種のオクターブ記号を任意個付けられる。
+# シェルを介さず引数配列として渡すため、アポストロフィーのエスケープは不要。
+PITCH_PATTERN = (
+    r"^(?:beses|ases|ees|eis|ces|fes|cis|des|dis|es|fis|ges|gis|as|ais|bes|c|d|e|f|g|a|b)"
+    r"(?:'+|,+)?$"
+)
+PitchName = Annotated[str, Field(pattern=PITCH_PATTERN, max_length=16)]
 
 
 class TransposeRequest(BaseModel):

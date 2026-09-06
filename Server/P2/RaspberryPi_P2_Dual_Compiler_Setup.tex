@@ -14,7 +14,7 @@
 
 \title{P2 TeX・LilyPond・移調\\サービス構築手順}
 \author{}
-\date{2026年8月30日}
+\date{2026年9月6日}
 
 \begin{document}
 \maketitle
@@ -240,8 +240,8 @@ Content-Type: application/json
 
 request:
 {
-  "sourcePitch": "c",
-  "destinationPitch": "a",
+  "sourcePitch": "g",
+  "destinationPitch": "d'",
   "source": "LilyPond source text"
 }
 
@@ -255,11 +255,23 @@ response:
 Python実行ファイルと\texttt{main.py}を引数リストで起動し、\texttt{source}を標準入力へ
 渡す。シェル、リダイレクト文字列、ユーザー指定コマンドを実行してはならない。
 
+\texttt{sourcePitch}と\texttt{destinationPitch}には、CLIが対応するLilyPond音名と、任意の
+オクターブ指示を指定できる。ASCIIアポストロフィー\texttt{'}は1個につき1オクターブ上、
+カンマ\texttt{,}は1個につき1オクターブ下を意味する。例えば\texttt{g}から\texttt{d}は
+5半音下、\texttt{g}から\texttt{d'}は7半音上、\texttt{g}から\texttt{d,}は17半音下である。
+JSON文字列として送信し、P2はシェルを介さず引数配列へ渡すため、APIデータ内の
+アポストロフィーにバックスラッシュを付けない。\texttt{d\textbackslash'}は無効である。
+
+アポストロフィーとカンマは同じ指示内で混在させない。\texttt{c''}や\texttt{c,,}は有効、
+\texttt{c',}は無効である。P2 APIが受理するのはASCIIアポストロフィーだけであり、スマート
+引用符はLilyPondNoteアプリ側でASCIIへ正規化してから送信する。APIを直接呼ぶクライアントは
+最初からASCIIアポストロフィーを使用する。
+
 ラッパーには次の制限を実装する。
 
 \begin{itemize}
   \item Pydanticで未知フィールドを拒否し、入力テキストを2,000,000文字以下にする。
-  \item 移調元・移調先音名をCLIが対応する値の許可リストで検証する。
+  \item 移調元・移調先を「CLIが対応する音名＋同種のアポストロフィーまたはカンマ」で検証する。
   \item subprocessへタイムアウト、CPU、メモリ、出力サイズの上限を設定する。
   \item 終了コードが0でない場合はPDF生成APIと区別できるエラーとして返す。
   \item ログ、例外、journalへ入力楽譜全文や内部トークンを出力しない。
@@ -535,6 +547,11 @@ curl -sS http://192.168.40.10:8002/health
 HTTP 200でも\texttt{unavailable}または\texttt{false}なら、envの
 \texttt{LILYPOND\_TRANSPOSE\_MAIN}と\path{/opt/lilypond-transpose/P2/engine/main.py}の
 存在・権限が一致していない。
+
+移調APIの結合試験では、オクターブ指示なしだけでなく、\texttt{g}から\texttt{d'}、
+\texttt{c}から\texttt{c,}も送信する。前者が7半音上、後者が12半音下の
+\texttt{transposedSource}を返すことを確認する。また、\texttt{d',}、スマート引用符を含む
+\texttt{d’}、バックスラッシュを含む\texttt{d\textbackslash'}がHTTP 422になることを確認する。
 
 内部トークンなしの処理要求が401になることを確認する。
 

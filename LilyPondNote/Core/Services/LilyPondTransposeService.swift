@@ -33,18 +33,22 @@ enum LilyPondTransposeService {
         from sourcePitch: String,
         to destinationPitch: String
     ) async throws -> String {
+        // ローカルとリモートで同じ正規化済みの指示を使用する。
+        let normalizedSourcePitch = try LilyPondTransposer.normalizePitch(sourcePitch)
+        let normalizedDestinationPitch = try LilyPondTransposer.normalizePitch(destinationPitch)
+
         switch RemoteLilyPondConfigurationStore.savedTransposeMode {
         case .local:
             return try LilyPondTransposer().transpose(
                 source,
-                from: sourcePitch,
-                to: destinationPitch
+                from: normalizedSourcePitch,
+                to: normalizedDestinationPitch
             )
         case .remote:
             return try await RemoteLilyPondTransposer.transpose(
                 source: source,
-                from: sourcePitch,
-                to: destinationPitch
+                from: normalizedSourcePitch,
+                to: normalizedDestinationPitch
             )
         }
     }

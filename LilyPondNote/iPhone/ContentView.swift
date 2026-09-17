@@ -5,10 +5,6 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-private extension UTType {
-    static let lilyPondSource = UTType(filenameExtension: "ly") ?? .plainText
-}
-
 struct ContentView: View {
     @StateObject private var workspace = LilyPondNoteWorkspace(
         compiler: RemoteLilyPondConfigurationStore.loadCompiler()
@@ -18,6 +14,8 @@ struct ContentView: View {
     @State private var currentPDFPage = 1
     @State private var fileOperation: FileOperation?
     @State private var isShowingFileImporter = false
+    @State private var isShowingRootScoreImport = false
+    @State private var isShowingRootCreationOptions = false
     @State private var isNamingRootScore = false
     @State private var newRootTitle = ""
     @State private var isSelectingScore = false
@@ -36,8 +34,8 @@ struct ContentView: View {
     @FocusState private var isNoteTitleFocused: Bool
 
     private enum FileOperation: Equatable {
-        case openPackage, importScore, savePackageAs, exportScore
-        var contentTypes: [UTType] { self == .importScore ? [.lilyPondSource] : [.folder] }
+        case openPackage, savePackageAs, exportScore
+        var contentTypes: [UTType] { [.folder] }
     }
 
     var body: some View {
@@ -59,12 +57,20 @@ struct ContentView: View {
             LilyPondAboutView()
                 .presentationDetents([.height(350)])
         }
+        .sheet(isPresented: $isShowingRootScoreImport) {
+            iPhoneScoreImportView(
+                workspace: workspace,
+                destination: .root,
+                onImported: { currentPDFPage = 1 }
+            )
+        }
         .sheet(isPresented: $isSelectingScore) {
             NavigationStack {
                 List(flattenedScores) { item in
                     iPhoneCollapsibleScoreRow(
                         item: item,
-                        expandedScoreIDs: $expandedScoreIDs
+                        expandedScoreIDs: $expandedScoreIDs,
+                        isSelected: item.score.id == workspace.selectedScoreID
                     ) {
                         selectScore(item.score.id)
                         isSelectingScore = false
@@ -85,6 +91,20 @@ struct ContentView: View {
         .alert("新しい楽譜グループ", isPresented: $isNamingRootScore) {
             TextField("楽譜名", text: $newRootTitle)
             Button("作成") { createRootScore() }
+            Button("キャンセル", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "楽譜グループの追加",
+            isPresented: $isShowingRootCreationOptions,
+            titleVisibility: .visible
+        ) {
+            Button("新規楽譜グループ") {
+                newRootTitle = ""
+                isNamingRootScore = true
+            }
+            Button("既存ファイルのインポート") {
+                isShowingRootScoreImport = true
+            }
             Button("キャンセル", role: .cancel) {}
         }
         .alert(newNoteConfirmationTitle, isPresented: $isConfirmingNewNote) {
@@ -160,8 +180,7 @@ struct ContentView: View {
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
             HStack {
                 Button("新規作成", systemImage: "plus") {
-                    newRootTitle = ""
-                    isNamingRootScore = true
+                    isShowingRootCreationOptions = true
                 }
                 .labelStyle(.iconOnly)
                 Spacer()
@@ -182,7 +201,7 @@ struct ContentView: View {
                         packageName = workspace.document.title
                         isNamingPackage = true
                     }
-                    Button("インポート") { beginFileOperation(.importScore) }
+                    Button("インポート") { isShowingRootScoreImport = true }
                     Divider()
                     Button("設定") { isShowingServerSettings = true }
                     Button("LilyPondNoteについて", systemImage: "info.circle") {
@@ -349,7 +368,6 @@ struct ContentView: View {
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
             switch operation {
             case .openPackage: try workspace.openPackage(at: url)
-            case .importScore: try workspace.importRootScore(from: url)
             case .savePackageAs:
                 let destination = url.appendingPathComponent(
                     NoteFileUtilities.safeFileName(packageName) + ".lilypondnote",
@@ -478,8 +496,20 @@ private struct iPhoneCollapsibleScoreRow: View {
             }
             .buttonStyle(.plain)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
+                .shadow(
+                    color: isSelected ? Color.black.opacity(0.22) : Color.clear,
+                    radius: 4,
+                    y: 2
+                )
+        }
         .padding(.leading, CGFloat(item.depth) * 16)
         .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+        .listRowSeparator(.hidden)
     }
 }
 
@@ -637,17 +667,17 @@ private struct iPhoneScoreEditorView: View {
     @State private var processingProgram: String
     @State private var selectedTab: Tab = .score
     @State private var saveError = ""
-    @State private var isNamingChild = false
     @State private var childTitle = ""
     @State private var isSelectingScore = false
     @State private var isConfirmingDeletion = false
     @State private var scoreTitleDraft: String
     @FocusState private var isScoreTitleFocused: Bool
-    @State private var isShowingTransposeDialog = false
-    @State private var transposeTitle = String(localized: "移調した楽譜")
     @State private var sourcePitch = "c"
     @State private var destinationPitch = "a"
     @State private var isTransposing = false
+    @State private var derivationKind: ScoreDerivationKind = .new
+    @State private var isShowingDerivationSheet = false
+    @State private var isShowingDerivedScoreImport = false
     @State private var editorFontSize: Double
     @State private var expandedScoreIDs: Set<UUID> = []
 
@@ -685,14 +715,10 @@ private struct iPhoneScoreEditorView: View {
                 }
 
                 HStack(spacing: 6) {
-                    Button("新規作成", systemImage: "plus") {
+                    Button("派生楽譜", systemImage: "plus.square.on.square") {
                         childTitle = ""
-                        isNamingChild = true
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.bordered)
-                    Button("移調楽譜作成", systemImage: "music.note.list") {
-                        isShowingTransposeDialog = true
+                        derivationKind = .new
+                        isShowingDerivationSheet = true
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bordered)
@@ -751,11 +777,7 @@ private struct iPhoneScoreEditorView: View {
             editorBody.padding(10)
         }
         .background(.background)
-        .alert("下位楽譜を新規作成", isPresented: $isNamingChild) {
-            TextField("楽譜名", text: $childTitle)
-            Button("作成") { createChild() }
-            Button("キャンセル", role: .cancel) {}
-        }
+        .sheet(isPresented: $isShowingDerivationSheet) { derivationSheet }
         .sheet(isPresented: $isSelectingScore) {
             NavigationStack {
                 List {
@@ -768,7 +790,7 @@ private struct iPhoneScoreEditorView: View {
                             selectScore(item.score.id)
                             isSelectingScore = false
                         }
-                        .listRowBackground(item.score.id == workspace.selectedScoreID ? Color.accentColor.opacity(0.16) : Color.clear)
+                        .listRowBackground(Color.clear)
                     }
                     .onMove(perform: moveScoresWithinGroup)
                 }
@@ -784,17 +806,74 @@ private struct iPhoneScoreEditorView: View {
                 workspace.selectedScore?.title ?? String(localized: "選択中の楽譜")
             ))
         }
-        .alert("移調楽譜を作成", isPresented: $isShowingTransposeDialog) {
-            TextField("子楽譜名", text: $transposeTitle)
-            TextField("移調元（例: c）", text: $sourcePitch)
-            TextField("移調先（例: a）", text: $destinationPitch)
-            Button("作成") { createTransposedChild() }
-            Button("キャンセル", role: .cancel) {}
-        } message: {
-            Text(String(
-                format: String(localized: "transpose.create.message"),
-                RemoteLilyPondConfigurationStore.savedTransposeMode.displayName
-            ))
+    }
+
+    private var derivationSheet: some View {
+        NavigationStack {
+            Form {
+                Section("生成方法") {
+                    ForEach(ScoreDerivationKind.allCases) { kind in
+                        Button {
+                            derivationKind = kind
+                        } label: {
+                            Label(
+                                LocalizedStringKey(kind.rawValue),
+                                systemImage: derivationKind == kind ? "largecircle.fill.circle" : "circle"
+                            )
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                }
+                if derivationKind != .importFiles {
+                    Section("楽譜名") { TextField("子楽譜名", text: $childTitle) }
+                }
+                if derivationKind == .transpose {
+                    Section("移調設定") {
+                        TextField("移調元（例: c）", text: $sourcePitch)
+                        TextField("移調先（例: a）", text: $destinationPitch)
+                        Text(String(
+                            format: String(localized: "transpose.create.message"),
+                            RemoteLilyPondConfigurationStore.savedTransposeMode.displayName
+                        ))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("派生楽譜の生成")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("キャンセル") { isShowingDerivationSheet = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(derivationKind == .importFiles ? "ファイルを選択" : "作成") {
+                        if derivationKind == .importFiles {
+                            isShowingDerivedScoreImport = true
+                        } else {
+                            createDerivedScore()
+                        }
+                    }
+                    .disabled(
+                        (derivationKind != .importFiles
+                            && childTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        || isTransposing
+                    )
+                }
+            }
+            .sheet(isPresented: $isShowingDerivedScoreImport) {
+                iPhoneScoreImportView(
+                    workspace: workspace,
+                    destination: .child(
+                        parentScoreSource: scoreSource,
+                        parentProcessingProgram: processingProgram
+                    ),
+                    onImported: {
+                        reloadEditor()
+                        isShowingDerivationSheet = false
+                    }
+                )
+            }
         }
     }
 
@@ -847,7 +926,11 @@ private struct iPhoneScoreEditorView: View {
                 scoreSource: scoreSource,
                 processingProgram: processingProgram
             )
-            if !succeeded { selectedTab = .error }
+            if succeeded {
+                dismiss()
+            } else {
+                selectedTab = .error
+            }
         }
     }
 
@@ -876,32 +959,17 @@ private struct iPhoneScoreEditorView: View {
         } catch { show(error) }
     }
 
-    /// 必要なデータを作成して文書へ追加する。
-    private func createChild() {
+    /// 選択された生成方法で派生楽譜を作成する。
+    private func createDerivedScore() {
+        guard derivationKind != .importFiles else {
+            isShowingDerivedScoreImport = true
+            return
+        }
         let title = childTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
-        Task {
-            do {
-                try await ScoreDerivationService.create(
-                    kind: .new,
-                    title: title,
-                    scoreSource: scoreSource,
-                    processingProgram: processingProgram,
-                    sourcePitch: "",
-                    destinationPitch: "",
-                    workspace: workspace
-                )
-                reloadEditor()
-            } catch { show(error) }
-        }
-    }
-
-    /// 必要なデータを作成して文書へ追加する。
-    private func createTransposedChild() {
-        let title = transposeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = sourcePitch.trimmingCharacters(in: .whitespacesAndNewlines)
         let destination = destinationPitch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, !source.isEmpty, !destination.isEmpty else {
+        guard derivationKind != .transpose || (!source.isEmpty && !destination.isEmpty) else {
             saveError = String(localized: "子楽譜名、移調元、移調先を入力してください。")
             selectedTab = .error
             return
@@ -912,7 +980,7 @@ private struct iPhoneScoreEditorView: View {
             defer { isTransposing = false }
             do {
                 try await ScoreDerivationService.create(
-                    kind: .transpose,
+                    kind: derivationKind,
                     title: title,
                     scoreSource: scoreSource,
                     processingProgram: processingProgram,
@@ -921,9 +989,8 @@ private struct iPhoneScoreEditorView: View {
                     workspace: workspace
                 )
                 reloadEditor()
-            } catch {
-                show(error)
-            }
+                isShowingDerivationSheet = false
+            } catch { show(error) }
         }
     }
 

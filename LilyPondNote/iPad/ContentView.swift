@@ -6,10 +6,6 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-private extension UTType {
-    static let lilyPondSource = UTType(filenameExtension: "ly") ?? .plainText
-}
-
 struct ContentView: View {
     @StateObject private var workspace = LilyPondNoteWorkspace(
         compiler: RemoteLilyPondConfigurationStore.loadCompiler()
@@ -23,6 +19,7 @@ struct ContentView: View {
     @State private var splitViewVisibility: NavigationSplitViewVisibility = .all
     @State private var fileOperation: FileOperation?
     @State private var isShowingFileImporter = false
+    @State private var isShowingRootScoreImport = false
     @State private var isShowingAbout = false
     @State private var isNamingRootScore = false
     @State private var newRootTitle = ""
@@ -42,13 +39,10 @@ struct ContentView: View {
     @FocusState private var isNoteTitleFocused: Bool
 
     private enum FileOperation {
-        case openPackage, importScore, savePackageAs, exportScore
+        case openPackage, savePackageAs, exportScore
 
         var contentTypes: [UTType] {
-            switch self {
-            case .importScore: [.lilyPondSource]
-            default: [.folder]
-            }
+            [.folder]
         }
     }
 
@@ -95,6 +89,13 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingAbout) {
             LilyPondAboutView()
                 .presentationDetents([.height(350)])
+        }
+        .sheet(isPresented: $isShowingRootScoreImport) {
+            iPadScoreImportView(
+                workspace: workspace,
+                destination: .root,
+                onImported: { currentPDFPage = 1 }
+            )
         }
         .fileImporter(
             isPresented: $isShowingFileImporter,
@@ -191,7 +192,7 @@ struct ContentView: View {
                 }
                 Spacer()
                 Button("インポート", systemImage: "square.and.arrow.down.on.square") {
-                    beginFileOperation(.importScore)
+                    isShowingRootScoreImport = true
                 }
             }
             .padding(.horizontal, 14)
@@ -603,8 +604,6 @@ struct ContentView: View {
             case .openPackage:
                 openPackage(at: url)
                 return
-            case .importScore:
-                try workspace.importRootScore(from: url)
             case .savePackageAs:
                 let destination = url.appendingPathComponent(
                     NoteFileUtilities.safeFileName(packageName) + ".lilypondnote",
@@ -928,6 +927,7 @@ private struct iPadScoreEditorView: View {
     @State private var sourcePitch = "c"
     @State private var destinationPitch = "a"
     @State private var isTransposing = false
+    @State private var isShowingDerivedScoreImport = false
     @State private var editorFontSize: Double
 
     /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
@@ -1102,8 +1102,10 @@ private struct iPadScoreEditorView: View {
                         .foregroundStyle(.primary)
                     }
                 }
-                Section("楽譜名") {
-                    TextField("子楽譜名", text: $childTitle)
+                if derivationKind != .importFiles {
+                    Section("楽譜名") {
+                        TextField("子楽譜名", text: $childTitle)
+                    }
                 }
                 if derivationKind == .transpose {
                     Section("移調設定") {
@@ -1124,9 +1126,32 @@ private struct iPadScoreEditorView: View {
                     Button("キャンセル") { isShowingTransposeDialog = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("作成") { createDerivedScore() }
-                        .disabled(childTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isTransposing)
+                    Button(derivationKind == .importFiles ? "ファイルを選択" : "作成") {
+                        if derivationKind == .importFiles {
+                            isShowingDerivedScoreImport = true
+                        } else {
+                            createDerivedScore()
+                        }
+                    }
+                    .disabled(
+                        (derivationKind != .importFiles
+                            && childTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        || isTransposing
+                    )
                 }
+            }
+            .sheet(isPresented: $isShowingDerivedScoreImport) {
+                iPadScoreImportView(
+                    workspace: workspace,
+                    destination: .child(
+                        parentScoreSource: scoreSource,
+                        parentProcessingProgram: processingProgram
+                    ),
+                    onImported: {
+                        reloadEditor()
+                        isShowingTransposeDialog = false
+                    }
+                )
             }
         }
     }
@@ -1219,6 +1244,10 @@ private struct iPadScoreEditorView: View {
 
     /// 必要なデータを作成して文書へ追加する。
     private func createDerivedScore() {
+        guard derivationKind != .importFiles else {
+            isShowingDerivedScoreImport = true
+            return
+        }
         let title = childTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         let source = sourcePitch.trimmingCharacters(in: .whitespacesAndNewlines)

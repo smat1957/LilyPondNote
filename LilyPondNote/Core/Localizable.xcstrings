@@ -1,41 +1,6 @@
 {
   "sourceLanguage" : "ja",
   "strings" : {
-    "派生楽譜" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Derived Score" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "派生楽譜" } } } },
-    "派生楽譜の生成" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Create Derived Score" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "派生楽譜の生成" } } } },
-    "現在編集中の楽譜の削除" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Delete Current Score" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "現在編集中の楽譜の削除" } } } },
-    "生成方法" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Creation Method" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "生成方法" } } } },
-    "複製楽譜" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Duplicate Score" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "複製楽譜" } } } },
-    "移調楽譜" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Transposed Score" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "移調楽譜" } } } },
-    "移調設定" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Transposition" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "移調設定" } } } },
-    "Noteを読み込んでいます…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Loading Note…"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Noteを読み込んでいます…"
-          }
-        }
-      }
-    },
-    "ログイン中" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Logged in"
-          }
-        }
-      }
-    },
     "%@ / %@" : {
       "localizations" : {
         "en" : {
@@ -54,8 +19,18 @@
     },
     "%@ pt" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "%@ pt" } },
-        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ pt" } }
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ pt"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ pt"
+          }
+        }
       }
     },
     "%@・%@" : {
@@ -127,8 +102,18 @@
     },
     "LilyPond %@" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "LilyPond %@" } },
-        "ja" : { "stringUnit" : { "state" : "translated", "value" : "LilyPond %@" } }
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LilyPond %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LilyPond %@"
+          }
+        }
       }
     },
     "LilyPondNote" : {
@@ -277,6 +262,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選択したフォルダ内の「%@」を上書きしてもよいですか？"
+          }
+        }
+      }
+    },
+    "Noteを読み込んでいます…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading Note…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noteを読み込んでいます…"
           }
         }
       }
@@ -623,6 +625,18 @@
         }
       }
     },
+    "インポートするファイル" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Files to Import" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "インポートするファイル" } } } },
+    "インポートしました" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Imported" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "インポートしました" } } } },
+    "ファイルを選択" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Select a File" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "ファイルを選択" } } } },
+    "処理手続き（%@）には \\include \"score.ly\" がありません。インポート後、編集画面で追加してください。" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The processing program (%@) does not include \\include \"score.ly\". Add it in the editor after importing." } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "処理手続き（%@）には \\include \"score.ly\" がありません。インポート後、編集画面で追加してください。" } } } },
+    "処理手続き（任意）" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Processing Program (Optional)" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "処理手続き（任意）" } } } },
+    "新規楽譜グループ" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "New Score Group" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "新規楽譜グループ" } } } },
+    "未選択" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Not Selected" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "未選択" } } } },
+    "楽譜グループの追加" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Add Score Group" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "楽譜グループの追加" } } } },
+    "楽譜データ" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Score Data" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "楽譜データ" } } } },
+    "楽譜データを選択してください。" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Select score data." } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "楽譜データを選択してください。" } } } },
+    "変更…" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Change…" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "変更…" } } } },
+    "選択…" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Select…" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "選択…" } } } },
     "エクスポート" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -876,6 +890,17 @@
         }
       }
     },
+    "ログイン中" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Logged in"
+          }
+        }
+      }
+    },
     "ログイン中のサーバーで処理し、月間利用回数に加算します。" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1063,6 +1088,17 @@
         }
       }
     },
+    "印刷" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Print"
+          }
+        }
+      }
+    },
     "同じ名前のNoteがあります" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1206,6 +1242,7 @@
         }
       }
     },
+    "既存ファイルのインポート" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Import Existing Files" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "既存ファイルのインポート" } } } },
     "更新待ち" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1338,6 +1375,40 @@
         }
       }
     },
+    "派生楽譜" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Derived Score"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "派生楽譜"
+          }
+        }
+      }
+    },
+    "派生楽譜の生成" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create Derived Score"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "派生楽譜の生成"
+          }
+        }
+      }
+    },
     "版組サーバーから有効な応答を受信できませんでした。" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1404,6 +1475,40 @@
         }
       }
     },
+    "現在編集中の楽譜の削除" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete Current Score"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在編集中の楽譜の削除"
+          }
+        }
+      }
+    },
+    "生成方法" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Creation Method"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成方法"
+          }
+        }
+      }
+    },
     "移調サービスを利用するにはログインしてください。" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1459,6 +1564,23 @@
         }
       }
     },
+    "移調楽譜" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transposed Score"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移調楽譜"
+          }
+        }
+      }
+    },
     "移調楽譜を作成" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1477,6 +1599,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Create Transposed Score"
+          }
+        }
+      }
+    },
+    "移調設定" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transposition"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移調設定"
           }
         }
       }
@@ -1503,6 +1642,23 @@
         }
       }
     },
+    "複製楽譜" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duplicate Score"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "複製楽譜"
+          }
+        }
+      }
+    },
     "設定" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1510,17 +1666,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Settings"
-          }
-        }
-      }
-    },
-    "印刷" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Print"
           }
         }
       }

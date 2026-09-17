@@ -128,7 +128,8 @@ struct LilyPondNotePackageStore {
         in document: LilyPondNoteDocument,
         packageURL: URL,
         scoreData: String = LilyPondTemplates.initialScoreData,
-        processingProgram: String = LilyPondTemplates.initialProcessingProgram
+        processingProgram: String = LilyPondTemplates.initialProcessingProgram,
+        validatesProcessingProgram: Bool = true
     ) throws -> ScoreFileSet {
         let containerURL: URL
         if let parentID,
@@ -154,7 +155,14 @@ struct LilyPondNotePackageStore {
         )
         do {
             try writeScoreData(scoreData, to: fileSet)
-            try writeProcessingProgram(processingProgram, to: fileSet)
+            if validatesProcessingProgram {
+                try writeProcessingProgram(processingProgram, to: fileSet)
+            } else {
+                try Data(processingProgram.utf8).write(
+                    to: fileSet.processingProgramURL,
+                    options: .atomic
+                )
+            }
         } catch {
             // 文書へ未登録の不完全な楽譜フォルダをPackage内に残さない。
             try? fileManager.removeItem(at: fileSet.directoryURL)

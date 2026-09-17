@@ -42,6 +42,13 @@ SwiftUI で作成した macOS・iPad・iPhone 向けのマルチターゲット�
 各`main.ly`は、同じScoreフォルダの`score.ly`だけをincludeします。親子関係による
 暗黙のincludeや継承は行いません。
 
+## 楽譜のインポート
+
+既存のLilyPond楽譜データと任意の処理手続きを、root Scoreまたは選択中のScoreの
+子としてインポートできます。処理手続きを選択しない場合は標準テンプレートを使用します。
+選択した処理手続きに`\include "score.ly"`がない場合は、内容を保持したまま
+インポートし、編集画面での修正を促します。
+
 Xcodeで `LilyPondNote.xcodeproj` を開き、実行するターゲットとデバイスを選択してください。
 
 ## 起動時の復元と画面

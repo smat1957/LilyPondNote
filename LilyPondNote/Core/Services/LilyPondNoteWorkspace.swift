@@ -123,13 +123,30 @@ final class LilyPondNoteWorkspace: ObservableObject {
     func importRootScore(from sourceURL: URL) throws -> UUID {
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
         let title = sourceURL.deletingPathExtension().lastPathComponent
+        return try importRootScore(
+            title: title,
+            scoreSource: source,
+            processingProgram: LilyPondTemplates.initialProcessingProgram
+        )
+    }
+
+    @discardableResult
+    /// 読み込んだ楽譜データと処理手続きをroot楽譜として追加する。
+    func importRootScore(
+        title: String,
+        scoreSource: String,
+        processingProgram: String,
+        validatesProcessingProgram: Bool = true
+    ) throws -> UUID {
         let score = Score(title: title)
         _ = try store.createFileSet(
             for: score,
             parentID: nil,
             in: document,
             packageURL: workingPackageURL,
-            scoreData: source
+            scoreData: scoreSource,
+            processingProgram: processingProgram,
+            validatesProcessingProgram: validatesProcessingProgram
         )
         document.appendRootScore(score)
         try store.saveMetadata(for: document, at: workingPackageURL)
@@ -143,7 +160,8 @@ final class LilyPondNoteWorkspace: ObservableObject {
     func createChildScore(
         title: String,
         scoreSource: String? = nil,
-        processingProgram: String? = nil
+        processingProgram: String? = nil,
+        validatesProcessingProgram: Bool = true
     ) throws -> UUID {
         guard let parentID = selectedScoreID else {
             throw WorkspaceError.scoreIsNotSelected
@@ -155,7 +173,8 @@ final class LilyPondNoteWorkspace: ObservableObject {
             in: document,
             packageURL: workingPackageURL,
             scoreData: scoreSource ?? self.scoreSource,
-            processingProgram: processingProgram ?? self.processingProgram
+            processingProgram: processingProgram ?? self.processingProgram,
+            validatesProcessingProgram: validatesProcessingProgram
         )
         guard document.appendChildScore(child, to: parentID) else {
             throw WorkspaceError.scoreNotFound(parentID)

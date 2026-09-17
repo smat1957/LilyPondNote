@@ -6,10 +6,6 @@ import LilyPondTransposeCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-private extension UTType {
-    static let lilyPondSource = UTType(filenameExtension: "ly") ?? .plainText
-}
-
 struct ContentView: View {
     @StateObject private var workspace = LilyPondNoteWorkspace(
         compiler: macOSLocalLilyPondCompiler()
@@ -18,6 +14,7 @@ struct ContentView: View {
     @State private var currentPDFPage = 1
     @State private var fileOperation: FileOperation?
     @State private var isShowingFileImporter = false
+    @State private var isShowingRootScoreImport = false
     @State private var isNamingRootScore = false
     @State private var newRootTitle = ""
     @State private var isShowingAbout = false
@@ -37,8 +34,8 @@ struct ContentView: View {
     @FocusState private var isNoteTitleFocused: Bool
 
     private enum FileOperation: Equatable {
-        case openPackage, importScore, savePackageAs, exportScore
-        var contentTypes: [UTType] { self == .importScore ? [.lilyPondSource] : [.folder] }
+        case openPackage, savePackageAs, exportScore
+        var contentTypes: [UTType] { [.folder] }
     }
 
     var body: some View {
@@ -64,7 +61,7 @@ struct ContentView: View {
                     }
                     Spacer()
                     Button("インポート", systemImage: "square.and.arrow.down.on.square") {
-                        beginFileOperation(.importScore)
+                        isShowingRootScoreImport = true
                     }
                 }
                 .padding(.horizontal, 12)
@@ -101,6 +98,13 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingAbout) {
             LilyPondAboutView()
                 .frame(minWidth: 460, minHeight: 340)
+        }
+        .sheet(isPresented: $isShowingRootScoreImport) {
+            macOSScoreImportView(
+                workspace: workspace,
+                destination: .root,
+                onImported: { currentPDFPage = 1 }
+            )
         }
         .fileImporter(
             isPresented: $isShowingFileImporter,
@@ -425,7 +429,6 @@ struct ContentView: View {
             let url = try result.get()
             switch operation {
             case .openPackage: try workspace.openPackage(at: url)
-            case .importScore: try workspace.importRootScore(from: url)
             case .savePackageAs:
                 let destination = url.appendingPathComponent(
                     NoteFileUtilities.safeFileName(packageName) + ".lilypondnote",
@@ -800,6 +803,7 @@ private struct macOSScoreEditorView: View {
     @State private var sourcePitch = "c"
     @State private var destinationPitch = "a"
     @State private var isTransposing = false
+    @State private var isShowingDerivedScoreImport = false
     @State private var derivationKind: ScoreDerivationKind = .new
     @State private var pendingDeletionScoreID: UUID?
     @State private var pendingDeletionScoreTitle = ""
@@ -974,7 +978,9 @@ private struct macOSScoreEditorView: View {
                 ForEach(ScoreDerivationKind.allCases) { Text(LocalizedStringKey($0.rawValue)).tag($0) }
             }
             .pickerStyle(.radioGroup)
-            TextField("子楽譜名", text: $childTitle)
+            if derivationKind != .importFiles {
+                TextField("子楽譜名", text: $childTitle)
+            }
             if derivationKind == .transpose {
                 TextField("移調元（例: c）", text: $sourcePitch)
                 TextField("移調先（例: a）", text: $destinationPitch)
@@ -985,12 +991,35 @@ private struct macOSScoreEditorView: View {
             HStack {
                 Spacer()
                 Button("キャンセル") { isShowingTransposeDialog = false }
-                Button("作成") { createDerivedScore() }
+                Button(derivationKind == .importFiles ? "ファイルを選択" : "作成") {
+                    if derivationKind == .importFiles {
+                        isShowingDerivedScoreImport = true
+                    } else {
+                        createDerivedScore()
+                    }
+                }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(childTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isTransposing)
+                    .disabled(
+                        (derivationKind != .importFiles
+                            && childTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        || isTransposing
+                    )
             }
         }
         .padding(24)
+        .sheet(isPresented: $isShowingDerivedScoreImport) {
+            macOSScoreImportView(
+                workspace: workspace,
+                destination: .child(
+                    parentScoreSource: scoreSource,
+                    parentProcessingProgram: processingProgram
+                ),
+                onImported: {
+                    reloadEditor()
+                    isShowingTransposeDialog = false
+                }
+            )
+        }
     }
 
     @ViewBuilder
@@ -1091,6 +1120,10 @@ private struct macOSScoreEditorView: View {
 
     /// 必要なデータを作成して文書へ追加する。
     private func createDerivedScore() {
+        guard derivationKind != .importFiles else {
+            isShowingDerivedScoreImport = true
+            return
+        }
         let title = childTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         let source = sourcePitch.trimmingCharacters(in: .whitespacesAndNewlines)

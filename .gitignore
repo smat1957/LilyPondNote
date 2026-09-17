@@ -62,6 +62,7 @@ Server/**/tmp/
 *.lilypondnote/
 
 # 一時ファイル
+tmp/
 *.tmp
 *.swp
 *~

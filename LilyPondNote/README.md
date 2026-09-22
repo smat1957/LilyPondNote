@@ -24,18 +24,20 @@ SwiftUI で作成した macOS・iPad・iPhone 向けのマルチターゲット�
 再帰的に持ちます。
 
 ```text
-ノート名/
+ノート名.lilypondnote/
 ├── note.json
 └── Scores/
     └── Score UUID/
         ├── score.ly
         ├── main.ly
         ├── output.pdf
+        ├── compile.log
         └── Scores/
             └── 子Score UUID/
                 ├── score.ly
                 ├── main.ly
                 ├── output.pdf
+                ├── compile.log
                 └── Scores/
 ```
 
@@ -56,6 +58,8 @@ Xcodeで `LilyPondNote.xcodeproj` を開き、実行するターゲットとデ�
 最後に開いた、または保存したPackageへのbookmarkを保存し、次回起動時に
 そのPackageを復元します。bookmarkがない初回起動時や、Packageを復元
 できない場合は、楽譜が0個の「名称未設定」Noteを表示します。
+iPhone・iPadでは画面表示後に復元し、確認・コピー・楽譜を開く段階を
+読み込み表示で知らせます。macOS版の起動方法は従来どおりです。
 
 主画面の編集ボタンから、次の3タブを持つ編集画面を開きます。
 
@@ -64,7 +68,8 @@ Xcodeで `LilyPondNote.xcodeproj` を開き、実行するターゲットとデ�
 - エラー表示
 
 iPadとmacOSではScore一覧とPDFを2カラムで表示し、iPhoneではPDFを優先して
-表示します。iPadのPDFは1ページ単位で停止する左右スワイプで移動し、Scoreタイトルバーに現在ページと総ページ数を
+表示します。iPadのPDFは1ページ単位で停止する左右スワイプで移動し、先頭ページの
+右スワイプでサイドバーを開けます。Scoreタイトルバーに現在ページと総ページ数を
 表示します。iPadとiPhoneの編集画面は全画面で開き、上部の操作列とセグメント型タブ、
 ダーク背景のコード編集領域で構成します。現段階では検索と行番号表示は持ちません。
 

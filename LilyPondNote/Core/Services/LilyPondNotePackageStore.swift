@@ -21,7 +21,7 @@ struct LilyPondNotePackageStore {
         self.decoder = JSONDecoder()
     }
 
-    /// 必要なデータを作成して文書へ追加する。
+    /// Noteのディレクトリと初期ファイルを作成する。
     func createPackage(
         for document: LilyPondNoteDocument,
         at packageURL: URL
@@ -42,7 +42,7 @@ struct LilyPondNotePackageStore {
         try saveMetadata(for: document, at: packageURL)
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// Package内のメタデータを読み取り、文書モデルへ復元する。
     func loadDocument(from packageURL: URL) throws -> LilyPondNoteDocument {
         let data = try Data(contentsOf: metadataURL(in: packageURL))
         let document = try decoder.decode(LilyPondNoteDocument.self, from: data)
@@ -50,7 +50,7 @@ struct LilyPondNotePackageStore {
         return document
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 文書モデルを検証し、Packageのメタデータへ保存する。
     func saveMetadata(
         for document: LilyPondNoteDocument,
         at packageURL: URL
@@ -60,7 +60,7 @@ struct LilyPondNotePackageStore {
         try data.write(to: metadataURL(in: packageURL), options: .atomic)
     }
 
-    /// `fileSet`が担当する処理を実行する。
+    /// 指定IDの楽譜に対応するファイル群の場所を探す。
     func fileSet(
         for scoreID: UUID,
         in document: LilyPondNoteDocument,
@@ -85,17 +85,17 @@ struct LilyPondNotePackageStore {
         )
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// 楽譜のLilyPondソースをUTF-8で読み込む。
     func readScoreData(from fileSet: ScoreFileSet) throws -> String {
         try String(contentsOf: fileSet.scoreDataURL, encoding: .utf8)
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// 楽譜の処理手続きファイルをUTF-8で読み込む。
     func readProcessingProgram(from fileSet: ScoreFileSet) throws -> String {
         try String(contentsOf: fileSet.processingProgramURL, encoding: .utf8)
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// 生成済みPDFがあればデータを読み込む。
     func readPDF(from fileSet: ScoreFileSet) throws -> Data? {
         guard fileManager.fileExists(atPath: fileSet.pdfURL.path) else {
             return nil
@@ -103,12 +103,12 @@ struct LilyPondNotePackageStore {
         return try Data(contentsOf: fileSet.pdfURL)
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 生成したPDFデータを楽譜の保存先へ書き込む。
     func writePDF(_ data: Data, to fileSet: ScoreFileSet) throws {
         try data.write(to: fileSet.pdfURL, options: .atomic)
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// 保存済みのコンパイルログを読み込む。
     func readCompileLog(from fileSet: ScoreFileSet) throws -> String {
         guard fileManager.fileExists(atPath: fileSet.compileLogURL.path) else {
             return ""
@@ -116,12 +116,12 @@ struct LilyPondNotePackageStore {
         return try String(contentsOf: fileSet.compileLogURL, encoding: .utf8)
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// コンパイルログを楽譜の保存先へ書き込む。
     func writeCompileLog(_ log: String, to fileSet: ScoreFileSet) throws {
         try Data(log.utf8).write(to: fileSet.compileLogURL, options: .atomic)
     }
 
-    /// 必要なデータを作成して文書へ追加する。
+    /// 楽譜に必要なソース・処理手続き・子階層を作成する。
     func createFileSet(
         for score: Score,
         parentID: UUID?,
@@ -199,7 +199,7 @@ struct LilyPondNotePackageStore {
         try fileManager.removeItem(at: fileSet.directoryURL)
     }
 
-    /// `copyPackage`が担当する処理を実行する。
+    /// 既存の作業用Packageを置き換えて元のPackageを複製する。
     func copyPackage(from sourceURL: URL, to destinationURL: URL) throws {
         guard sourceURL.standardizedFileURL != destinationURL.standardizedFileURL
         else { return }
@@ -212,7 +212,7 @@ struct LilyPondNotePackageStore {
         try fileManager.copyItem(at: sourceURL, to: destinationURL)
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 作業用Packageを持ち運べる保存先へ書き出す。
     func savePortablePackage(
         for document: LilyPondNoteDocument,
         from sourcePackageURL: URL,
@@ -246,7 +246,7 @@ struct LilyPondNotePackageStore {
         try saveMetadata(for: document, at: destinationPackageURL)
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 文書階層に対応する楽譜ファイル群を書き出す。
     private func writeFileSets(
         for scores: [Score],
         from sourceScoresURL: URL,
@@ -297,7 +297,7 @@ struct LilyPondNotePackageStore {
         }
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 選択楽譜のファイル群を指定ディレクトリへ書き出す。
     func exportFileSet(_ fileSet: ScoreFileSet, to directoryURL: URL) throws {
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         for source in [
@@ -315,12 +315,12 @@ struct LilyPondNotePackageStore {
         }
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// LilyPondソースを楽譜ファイルへ保存する。
     func writeScoreData(_ source: String, to fileSet: ScoreFileSet) throws {
         try Data(source.utf8).write(to: fileSet.scoreDataURL, options: .atomic)
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 処理手続きのLilyPondソースを保存する。
     func writeProcessingProgram(
         _ source: String,
         to fileSet: ScoreFileSet
@@ -345,7 +345,7 @@ struct LilyPondNotePackageStore {
         }
     }
 
-    /// 必要なデータを作成して文書へ追加する。
+    /// 文書階層に不足している楽譜ファイル群を作成する。
     private func createMissingFileSets(
         for scores: [Score],
         in scoresDirectoryURL: URL
@@ -489,12 +489,12 @@ struct LilyPondNotePackageStore {
         }
     }
 
-    /// `metadataURL`が担当する処理を実行する。
+    /// Package内のメタデータファイルの場所を返す。
     private func metadataURL(in packageURL: URL) -> URL {
         packageURL.appendingPathComponent(Self.metadataFileName)
     }
 
-    /// `rootScoresDirectoryURL`が担当する処理を実行する。
+    /// Package内のroot楽譜ディレクトリの場所を返す。
     private func rootScoresDirectoryURL(in packageURL: URL) -> URL {
         packageURL.appendingPathComponent(
             Self.rootScoresDirectoryName,

@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var workspace = LilyPondNoteWorkspace(
-        compiler: RemoteLilyPondConfigurationStore.loadCompiler()
+        compiler: RemoteLilyPondConfigurationStore.loadCompiler(),
+        restoresOnInitialization: false
     )
     @State private var isEditing = false
     @State private var isShowingServerSettings = false
@@ -39,6 +40,13 @@ struct ContentView: View {
     }
 
     var body: some View {
+        dialogs
+            .task { await workspace.restoreAtLaunch() }
+            .onAppear { noteTitleDraft = workspace.document.title }
+            .onChange(of: workspace.document.title) { _, title in noteTitleDraft = title }
+    }
+
+    private var baseContent: some View {
         VStack(spacing: 0) {
             noteTitleBar
             Divider()
@@ -47,6 +55,28 @@ struct ContentView: View {
             pdfContent
         }
         .background(.background)
+        .overlay {
+            if let phase = workspace.startupLoadingPhase {
+                ZStack {
+                    Color.black.opacity(0.18)
+                        .ignoresSafeArea()
+                    VStack(spacing: 14) {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text(phase.message)
+                            .font(.headline)
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                    .shadow(radius: 12)
+                }
+            }
+        }
+    }
+
+    private var presentations: some View {
+        baseContent
         .fullScreenCover(isPresented: $isEditing) {
             iPhoneScoreEditorView(workspace: workspace)
         }
@@ -84,6 +114,10 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private var dialogs: some View {
+        presentations
         .fileImporter(
             isPresented: $isShowingFileImporter,
             allowedContentTypes: fileOperation?.contentTypes ?? [.folder]
@@ -159,8 +193,6 @@ struct ContentView: View {
         } message: {
             Text(operationMessage)
         }
-        .onAppear { noteTitleDraft = workspace.document.title }
-        .onChange(of: workspace.document.title) { _, title in noteTitleDraft = title }
     }
 
     private var noteTitleBar: some View {
@@ -309,14 +341,14 @@ struct ContentView: View {
         )
     }
 
-    /// 必要なデータを作成して文書へ追加する。
+    /// 入力された名前でroot楽譜を作成し、エラーを画面へ示す。
     private func createRootScore() {
         let title = newRootTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         perform { try workspace.createRootScore(title: title) }
     }
 
-    /// `renameNote`が担当する処理を実行する。
+    /// 入力されたNote名を保存し、確定した名前を画面へ戻す。
     private func renameNote() {
         do {
             try workspace.renameNote(to: noteTitleDraft)
@@ -327,13 +359,13 @@ struct ContentView: View {
         }
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 指定楽譜を選択し、PDFページまたはエディタ内容を更新する。
     private func selectScore(_ id: UUID) {
         perform { try workspace.selectScore(id) }
         currentPDFPage = 1
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 表示順で隣の楽譜グループを選び、PDFの先頭を表示する。
     private func moveToAdjacentScoreGroup(_ offset: Int) {
         do {
             let scores = flattenedScores
@@ -350,7 +382,7 @@ struct ContentView: View {
         }
     }
 
-    /// `continueSaveAs`が担当する処理を実行する。
+    /// Note名を検証して保存先フォルダの選択を開始する。
     private func continueSaveAs() {
         do {
             packageName = try workspace.validatedNoteName(packageName)
@@ -358,7 +390,7 @@ struct ContentView: View {
         } catch { operationError = error.localizedDescription }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 選択した場所に応じてPackageの読込・保存・書出を行う。
     private func handleFileSelection(_ result: Result<URL, Error>) {
         let operation = fileOperation
         defer { fileOperation = nil }
@@ -396,13 +428,13 @@ struct ContentView: View {
         } catch { operationError = error.localizedDescription }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// ファイル操作の種類を記録して選択画面を開く。
     private func beginFileOperation(_ operation: FileOperation) {
         fileOperation = operation
         isShowingFileImporter = true
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 未保存の変更があれば確認し、なければPackage選択を開く。
     private func requestOpenPackage() {
         if workspace.document.scores.isEmpty || !workspace.hasUnsavedChanges {
             beginFileOperation(.openPackage)
@@ -411,7 +443,7 @@ struct ContentView: View {
         }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 楽譜があれば確認し、なければ空のNoteを作る。
     private func requestNewNote() {
         if workspace.document.scores.isEmpty {
             perform { try workspace.newNote() }
@@ -437,7 +469,7 @@ struct ContentView: View {
             ?? packageName
     }
 
-    /// `overwritePendingPackage`が担当する処理を実行する。
+    /// 指定済みの保存先へ既存Packageを上書きする。
     private func overwritePendingPackage() {
         guard let destination = pendingOverwriteDestination else { return }
         pendingOverwriteDestination = nil
@@ -456,7 +488,7 @@ struct ContentView: View {
         }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 画面操作で生じたエラーをiPhoneの通知文へ反映する。
     private func perform(_ action: () throws -> Void) {
         do { try action() } catch { operationError = error.localizedDescription }
     }
@@ -561,7 +593,7 @@ private struct iPhonePDFView: UIViewRepresentable {
         coordinator.stopObserving()
     }
 
-    /// `fitDocument`が担当する処理を実行する。
+    /// PDFの幅と倍率を表示領域へ合わせる。
     private func fitDocument(in view: PDFView) {
         view.autoScales = true
         let scale = view.scaleFactorForSizeToFit
@@ -589,19 +621,19 @@ private struct iPhonePDFView: UIViewRepresentable {
             self.onLeadingEdgeSwipe = onLeadingEdgeSwipe
         }
 
-        /// `shouldDisplay`が担当する処理を実行する。
+        /// 表示中のPDFデータが変わったかを判定する。
         func shouldDisplay(_ data: Data) -> Bool {
             guard displayedData != data else { return false }
             displayedData = data
             return true
         }
 
-        /// `stopObserving`が担当する処理を実行する。
+        /// 登録済みの通知やイベント監視を解除する。
         func stopObserving() {
             NotificationCenter.default.removeObserver(self)
         }
 
-        /// `installSwipeRecognizers`が担当する処理を実行する。
+        /// PDF表示にページ端のスワイプ認識器を取り付ける。
         func installSwipeRecognizers(on view: PDFView) {
             for direction in [UISwipeGestureRecognizer.Direction.up, .down, .right] {
                 let recognizer = UISwipeGestureRecognizer(
@@ -614,7 +646,7 @@ private struct iPhonePDFView: UIViewRepresentable {
             }
         }
 
-        /// `didSwipe`が担当する処理を実行する。
+        /// 先頭ページの右スワイプで楽譜一覧を開き、上下スワイプで楽譜を切り替える。
         @objc private func didSwipe(_ recognizer: UISwipeGestureRecognizer) {
             if recognizer.direction == .right {
                 if currentPage.wrappedValue == 1 { onLeadingEdgeSwipe() }
@@ -623,12 +655,12 @@ private struct iPhonePDFView: UIViewRepresentable {
             }
         }
 
-        /// `gestureRecognizer`が担当する処理を実行する。
+        /// PDFの既存ジェスチャーとの同時認識可否を決める。
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool { true }
-        /// `observe`が担当する処理を実行する。
+        /// PDF表示のページ変更通知を監視する。
         func observe(_ view: PDFView) {
             NotificationCenter.default.addObserver(
                 self,
@@ -639,7 +671,7 @@ private struct iPhonePDFView: UIViewRepresentable {
         }
 
         @MainActor
-        /// `pageDidChange`が担当する処理を実行する。
+        /// PDFKitのページ変更を現在ページの表示へ反映する。
         @objc private func pageDidChange(_ notification: Notification) {
             guard let view = notification.object as? PDFView,
                   let page = view.currentPage,
@@ -901,14 +933,14 @@ private struct iPhoneScoreEditorView: View {
         saveError.isEmpty ? workspace.errorLog : saveError
     }
 
-    /// `darkEditor`が担当する処理を実行する。
+    /// 暗色背景に合わせたLilyPondソースエディタを構成する。
     private func darkEditor(text: Binding<String>) -> some View {
         iPhoneLilyPondSourceEditor(text: text, fontSize: editorFontSize)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
             .overlay { RoundedRectangle(cornerRadius: 10).stroke(.separator) }
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 編集した楽譜ソースと処理手続きを保存する。
     private func save() {
         do {
             try workspace.saveScore(scoreSource: scoreSource, processingProgram: processingProgram)
@@ -919,7 +951,7 @@ private struct iPhoneScoreEditorView: View {
         }
     }
 
-    /// 入力を処理して生成結果を返す。
+    /// 編集中の楽譜からPDFを生成し、結果を画面へ反映する。
     private func generate() {
         Task {
             let succeeded = await workspace.generatePDF(
@@ -942,7 +974,7 @@ private struct iPhoneScoreEditorView: View {
         )
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 同じ親の楽譜を並べ替え、失敗時は画面に通知する。
     private func moveScoresWithinGroup(from source: IndexSet, to destination: Int) {
         guard let move = ScoreNavigation.siblingMove(
             in: workspace.document,
@@ -1002,7 +1034,7 @@ private struct iPhoneScoreEditorView: View {
         } catch { show(error) }
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 指定楽譜を選択し、PDFページまたはエディタ内容を更新する。
     private func selectScore(_ id: UUID) {
         do {
             try workspace.selectScore(id)
@@ -1010,7 +1042,7 @@ private struct iPhoneScoreEditorView: View {
         } catch { show(error) }
     }
 
-    /// `reloadEditor`が担当する処理を実行する。
+    /// 選択楽譜のソースとタイトルをエディタの入力状態へ読み込む。
     private func reloadEditor() {
         scoreSource = workspace.scoreSource
         processingProgram = workspace.processingProgram
@@ -1018,7 +1050,7 @@ private struct iPhoneScoreEditorView: View {
         saveError = ""
     }
 
-    /// `renameScore`が担当する処理を実行する。
+    /// 編集した楽譜名を保存し、確定したタイトルを表示する。
     private func renameScore() {
         do {
             try workspace.renameSelectedScore(to: scoreTitleDraft)
@@ -1030,7 +1062,7 @@ private struct iPhoneScoreEditorView: View {
         }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 発生したエラーの説明を画面へ表示する。
     private func show(_ error: Error) {
         saveError = error.localizedDescription
         selectedTab = .error

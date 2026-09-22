@@ -2,21 +2,16 @@
 
 import Foundation
 
-enum iOSPackageBookmarkOptions {
-    static let creation: URL.BookmarkCreationOptions = []
-    static let resolution: URL.BookmarkResolutionOptions = []
-}
-
 enum PackageBookmarkStore {
     private static let bookmarkKey = "lastPackageBookmark"
     private static let relativePackageNameKey = "lastPackageRelativeName"
 
-    /// 対象データを保存先へ書き込む。
+    /// 次回復元できるようPackageのアクセス先をブックマークへ保存する。
     static func save(_ packageURL: URL) throws {
         try saveBookmark(for: packageURL, relativePackageName: nil)
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 次回復元できるようPackageのアクセス先をブックマークへ保存する。
     static func save(packageURL: URL, accessRootURL: URL) throws {
         let package = packageURL.standardizedFileURL
         let accessRoot = accessRootURL.standardizedFileURL
@@ -26,7 +21,7 @@ enum PackageBookmarkStore {
         try saveBookmark(for: accessRoot, relativePackageName: package.lastPathComponent)
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// アクセス先のブックマークと相対Package名を保存する。
     private static func saveBookmark(
         for accessURL: URL,
         relativePackageName: String?
@@ -44,7 +39,7 @@ enum PackageBookmarkStore {
         }
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// 保存済みブックマークから前回のPackageの場所を復元する。
     static func resolve() throws -> ResolvedPackageBookmark? {
         guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else {
             return nil

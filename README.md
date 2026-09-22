@@ -17,6 +17,7 @@ Note Packageとして管理するSwiftUIアプリです。macOS、iPad、iPhone�
 - ローカルまたはリモートでの移調処理
 - リモートサービスのFree、Standard、Pro契約プラン表示
 - 日本語と英語の表示
+- iPhone・iPad起動時の前回Note復元と段階別の読み込み表示
 
 ## 対応ターゲット
 
@@ -45,6 +46,7 @@ LilyPondNote/
 `Core`には、Note Packageの読み書き、楽譜階層、PDF生成状態、移調、リモート認証
 などの共通ロジックを置きます。AppKit、UIKit、PDF表示操作などの
 プラットフォーム固有処理は、`macOS`、`iPad`、`iPhone`の各フォルダに置きます。
+iPad用のPDFページ画像描画も`iPad`側に置き、共通の選択範囲補正は`Core`で共有します。
 
 詳しいアプリ構成は[アプリREADME](LilyPondNote/README.md)、サーバー構成は
 [サーバーREADME](Server/README.md)を参照してください。
@@ -96,6 +98,10 @@ PDFタイトルには、コンパイル結果またはPDFから取得したLilyP
 
 移調処理は設定からローカルまたはリモートを選択できます。リモート移調だけが
 サービス側の利用回数として記録されます。
+
+iPhone・iPadでは、前回のNoteを起動後に復元し、確認・コピー・楽譜を開く段階を
+読み込み表示で知らせます。iPadではPDFを左右にスワイプしてページを送り、
+先頭ページで右へスワイプするとサイドバーを開けます。
 
 ## 開発環境
 

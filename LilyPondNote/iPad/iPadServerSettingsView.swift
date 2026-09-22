@@ -134,7 +134,7 @@ struct iPadServerSettingsView: View {
         }
     }
 
-    /// `rememberCurrentInput`が担当する処理を実行する。
+    /// ログインに入力した接続先とメールアドレスを保存する。
     private func rememberCurrentInput() {
         RemoteLilyPondConfigurationStore.remember(
             serverURL: serverURL,

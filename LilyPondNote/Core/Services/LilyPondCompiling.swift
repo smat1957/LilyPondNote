@@ -40,7 +40,7 @@ enum LilyPondCompilerVersion {
 }
 
 protocol LilyPondCompiling: Sendable {
-    /// 入力を処理して生成結果を返す。
+    /// LilyPondソースをコンパイルしてPDF・ログ・バージョンを返す。
     func compile(_ input: LilyPondCompilationInput) async throws
         -> LilyPondCompilationResult
 }

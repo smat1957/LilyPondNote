@@ -27,7 +27,7 @@ enum LilyPondTransposeMode: String, CaseIterable, Identifiable {
 }
 
 enum LilyPondTransposeService {
-    /// 入力を処理して生成結果を返す。
+    /// 保存済み設定に応じてローカルまたはサーバーで移調する。
     static func transpose(
         source: String,
         from sourcePitch: String,

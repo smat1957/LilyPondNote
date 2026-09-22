@@ -14,7 +14,7 @@ actor RemoteLilyPondCompiler: LilyPondCompiling {
         self.session = session
     }
 
-    /// 入力を処理して生成結果を返す。
+    /// 認証付きでサーバーへ版組を依頼し、PDFとログを受け取る。
     func compile(_ input: LilyPondCompilationInput) async throws
         -> LilyPondCompilationResult {
         let endpoint = serverURL.appending(path: "compile")
@@ -118,7 +118,7 @@ enum RemoteLilyPondAuthentication {
         )
     }
 
-    /// `currentAccount`が担当する処理を実行する。
+    /// 認証済みサーバーから現在のアカウント情報を取得する。
     static func currentAccount(
         serverURL: URL,
         accessToken: String,

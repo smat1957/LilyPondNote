@@ -1,3 +1,8 @@
-// iPhone版でPackageブックマークを作る際のiOS固有オプションを選択する。
+// iPhoneでPackageブックマークを作成・復元する際のOS固有オプションを定義する。
 
-typealias PlatformPackageBookmarkOptions = iOSPackageBookmarkOptions
+import Foundation
+
+enum PlatformPackageBookmarkOptions {
+    static let creation: URL.BookmarkCreationOptions = []
+    static let resolution: URL.BookmarkResolutionOptions = []
+}

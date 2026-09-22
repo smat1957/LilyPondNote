@@ -55,21 +55,21 @@ struct macOSLilyPondSourceEditor: NSViewRepresentable {
         /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
         init(parent: macOSLilyPondSourceEditor) { self.parent = parent }
 
-        /// `textDidChange`が担当する処理を実行する。
+        /// テキスト変更を親Viewへ反映して構文着色を更新する。
         func textDidChange(_ notification: Notification) {
             guard !isHighlighting, let textView else { return }
             parent.text = textView.string
             applyHighlighting(to: textView)
         }
 
-        /// `setText`が担当する処理を実行する。
+        /// 外部から渡されたテキストを選択範囲を保って表示する。
         func setText(_ text: String) {
             guard let textView else { return }
             let selection = textView.selectedRange()
             isHighlighting = true
             textView.string = text
             applyAttributes(to: textView)
-            textView.setSelectedRange(clamped(selection, length: textView.textStorage?.length ?? 0))
+            textView.setSelectedRange(LilyPondSyntaxHighlighting.clampedSelection(selection, length: textView.textStorage?.length ?? 0))
             isHighlighting = false
         }
 
@@ -79,16 +79,16 @@ struct macOSLilyPondSourceEditor: NSViewRepresentable {
             applyHighlighting(to: textView)
         }
 
-        /// `applyHighlighting`が担当する処理を実行する。
+        /// 現在の選択位置を保ちながら構文着色を適用する。
         private func applyHighlighting(to textView: NSTextView) {
             let selection = textView.selectedRange()
             isHighlighting = true
             applyAttributes(to: textView)
-            textView.setSelectedRange(clamped(selection, length: textView.textStorage?.length ?? 0))
+            textView.setSelectedRange(LilyPondSyntaxHighlighting.clampedSelection(selection, length: textView.textStorage?.length ?? 0))
             isHighlighting = false
         }
 
-        /// `applyAttributes`が担当する処理を実行する。
+        /// 文字色と字体を初期化し、解析した構文範囲を着色する。
         private func applyAttributes(to textView: NSTextView) {
             guard let storage = textView.textStorage else { return }
             let range = NSRange(location: 0, length: storage.length)
@@ -107,7 +107,7 @@ struct macOSLilyPondSourceEditor: NSViewRepresentable {
             ]
         }
 
-        /// `color`が担当する処理を実行する。
+        /// 構文色の役割をOS固有の表示色へ変換する。
         private func color(for face: LilyPondSyntaxFace) -> NSColor {
             switch LilyPondEditorConfigurationStore.syntaxStyle.colorRole(for: face) {
             case .blue: .systemBlue
@@ -124,10 +124,5 @@ struct macOSLilyPondSourceEditor: NSViewRepresentable {
             }
         }
 
-        /// `clamped`が担当する処理を実行する。
-        private func clamped(_ range: NSRange, length: Int) -> NSRange {
-            let location = min(max(0, range.location), length)
-            return NSRange(location: location, length: min(range.length, length - location))
-        }
     }
 }

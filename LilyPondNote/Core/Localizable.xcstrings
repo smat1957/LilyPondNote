@@ -238,13 +238,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Logged in as %@"
+            "value" : "Signed in: %@"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@としてログイン中"
+            "value" : "Signed in: %@"
           }
         }
       }
@@ -1710,6 +1710,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Open…"
+          }
+        }
+      }
+    },
+    "前回のNoteを確認しています…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Locating the last Note…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前回のNoteを確認しています…"
+          }
+        }
+      }
+    },
+    "Noteの内容を確認しています…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking Note contents…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noteの内容を確認しています…"
+          }
+        }
+      }
+    },
+    "楽譜を開いています…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opening the score…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "楽譜を開いています…"
           }
         }
       }

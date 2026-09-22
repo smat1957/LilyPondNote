@@ -311,14 +311,14 @@ struct ContentView: View {
         operation.run()
     }
 
-    /// 必要なデータを作成して文書へ追加する。
+    /// 入力された名前でroot楽譜を作成し、エラーを画面へ示す。
     private func createRootScore() {
         let title = newRootTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         perform { try workspace.createRootScore(title: title) }
     }
 
-    /// `renameNote`が担当する処理を実行する。
+    /// 入力されたNote名を保存し、確定した名前を画面へ戻す。
     private func renameNote() {
         do {
             try workspace.renameNote(to: noteTitleDraft)
@@ -329,7 +329,7 @@ struct ContentView: View {
         }
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 指定楽譜を選択し、PDFページまたはエディタ内容を更新する。
     private func selectScore(_ id: UUID) {
         perform { try workspace.selectScore(id) }
         currentPDFPage = 1
@@ -352,9 +352,11 @@ struct ContentView: View {
             && operationMessage.isEmpty
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 上下キーに応じてサイドバーの選択楽譜を移す。
     private func moveSidebarSelection(_ direction: MoveCommandDirection) {
-        let scores = flattenedScores(workspace.document.scores)
+        let scores = workspace.document.scores.flatMap { root in
+            root.flattened().map(\.score)
+        }
         guard !scores.isEmpty else { return }
 
         let currentIndex = workspace.selectedScoreID.flatMap { selectedID in
@@ -373,14 +375,7 @@ struct ContentView: View {
         selectScore(scores[destination].id)
     }
 
-    /// `flattenedScores`が担当する処理を実行する。
-    private func flattenedScores(_ scores: [Score]) -> [Score] {
-        scores.flatMap { score in
-            [score] + flattenedScores(score.children)
-        }
-    }
-
-    /// 対象の選択または表示位置を変更する。
+    /// 展開状態を考慮して隣の楽譜を選択する。
     private func moveToAdjacentVisibleScore(_ offset: Int) {
         let items = ScoreNavigation.visibleItems(in: workspace.document.scores, expandedScoreIDs: expandedScoreIDs)
         guard let targetID = ScoreNavigation.adjacentScoreID(
@@ -392,7 +387,7 @@ struct ContentView: View {
         selectScore(targetID)
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// ドラッグされたroot楽譜の順序を文書へ反映する。
     private func moveRootScores(from source: IndexSet, to destination: Int) {
         perform {
             try workspace.moveRootScores(
@@ -413,7 +408,7 @@ struct ContentView: View {
         }
     }
 
-    /// `continueSaveAs`が担当する処理を実行する。
+    /// Note名を検証して保存先フォルダの選択を開始する。
     private func continueSaveAs() {
         do {
             packageName = try workspace.validatedNoteName(packageName)
@@ -421,7 +416,7 @@ struct ContentView: View {
         } catch { operationError = error.localizedDescription }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 選択した場所に応じてPackageの読込・保存・書出を行う。
     private func handleFileSelection(_ result: Result<URL, Error>) {
         let operation = fileOperation
         defer { fileOperation = nil }
@@ -455,13 +450,13 @@ struct ContentView: View {
         } catch { operationError = error.localizedDescription }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// ファイル操作の種類を記録して選択画面を開く。
     private func beginFileOperation(_ operation: FileOperation) {
         fileOperation = operation
         isShowingFileImporter = true
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 未保存の変更があれば確認し、なければPackage選択を開く。
     private func requestOpenPackage() {
         if workspace.document.scores.isEmpty || !workspace.hasUnsavedChanges {
             beginFileOperation(.openPackage)
@@ -470,7 +465,7 @@ struct ContentView: View {
         }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 楽譜があれば確認し、なければ空のNoteを作る。
     private func requestNewNote() {
         if workspace.document.scores.isEmpty {
             perform { try workspace.newNote() }
@@ -496,7 +491,7 @@ struct ContentView: View {
             ?? packageName
     }
 
-    /// `overwritePendingPackage`が担当する処理を実行する。
+    /// 指定済みの保存先へ既存Packageを上書きする。
     private func overwritePendingPackage() {
         guard let destination = pendingOverwriteDestination else { return }
         pendingOverwriteDestination = nil
@@ -515,7 +510,7 @@ struct ContentView: View {
         }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 画面操作で生じたエラーをmacOSの通知文へ反映する。
     private func perform(_ action: () throws -> Void) {
         do { try action() } catch { operationError = error.localizedDescription }
     }
@@ -558,7 +553,7 @@ private struct macOSArrowKeyMonitor: NSViewRepresentable {
             self.onMove = onMove
         }
 
-        /// `startMonitoring`が担当する処理を実行する。
+        /// 表示領域の入力イベント監視を開始する。
         func startMonitoring() {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -578,7 +573,7 @@ private struct macOSArrowKeyMonitor: NSViewRepresentable {
             }
         }
 
-        /// `stopMonitoring`が担当する処理を実行する。
+        /// サイドバーのキー入力監視を解除する。
         func stopMonitoring() {
             if let monitor {
                 NSEvent.removeMonitor(monitor)
@@ -710,7 +705,7 @@ private struct macOSPDFView: NSViewRepresentable {
             super.init()
         }
 
-        /// `startMonitoring`が担当する処理を実行する。
+        /// 表示領域の入力イベント監視を開始する。
         func startMonitoring(_ view: PDFView) {
             pdfView = view
             guard eventMonitor == nil else { return }
@@ -720,7 +715,7 @@ private struct macOSPDFView: NSViewRepresentable {
             }
         }
 
-        /// `stopMonitoring`が担当する処理を実行する。
+        /// PDF表示領域のスクロール監視を解除する。
         func stopMonitoring() {
             if let eventMonitor {
                 NSEvent.removeMonitor(eventMonitor)
@@ -728,7 +723,7 @@ private struct macOSPDFView: NSViewRepresentable {
             }
         }
 
-        /// 画面から要求された操作を処理する。
+        /// スクロール端での操作をページ移動に変換する。
         private func handleScrollWheel(_ event: NSEvent) {
             guard let view = pdfView,
                   event.window === view.window,
@@ -752,14 +747,14 @@ private struct macOSPDFView: NSViewRepresentable {
             }
         }
 
-        /// `shouldDisplay`が担当する処理を実行する。
+        /// 表示中のPDFデータが変わったかを判定する。
         func shouldDisplay(_ data: Data) -> Bool {
             guard displayedData != data else { return false }
             displayedData = data
             return true
         }
 
-        /// `observe`が担当する処理を実行する。
+        /// PDF表示のページ変更通知を監視する。
         func observe(_ view: PDFView) {
             NotificationCenter.default.addObserver(
                 self,
@@ -770,7 +765,7 @@ private struct macOSPDFView: NSViewRepresentable {
         }
 
         @MainActor
-        /// `pageDidChange`が担当する処理を実行する。
+        /// PDFKitのページ変更を現在ページの表示へ反映する。
         @objc private func pageDidChange(_ notification: Notification) {
             guard let view = notification.object as? PDFView,
                   let page = view.currentPage,
@@ -1046,14 +1041,14 @@ private struct macOSScoreEditorView: View {
         saveError.isEmpty ? workspace.errorLog : saveError
     }
 
-    /// `darkEditor`が担当する処理を実行する。
+    /// 暗色背景に合わせたLilyPondソースエディタを構成する。
     private func darkEditor(text: Binding<String>) -> some View {
         macOSLilyPondSourceEditor(text: text, fontSize: editorFontSize)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
             .overlay { RoundedRectangle(cornerRadius: 10).stroke(.separator) }
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 編集した楽譜ソースと処理手続きを保存する。
     private func save() {
         do {
             try workspace.saveScore(scoreSource: scoreSource, processingProgram: processingProgram)
@@ -1064,7 +1059,7 @@ private struct macOSScoreEditorView: View {
         }
     }
 
-    /// 入力を処理して生成結果を返す。
+    /// 編集中の楽譜からPDFを生成し、結果を画面へ反映する。
     private func generate() {
         Task {
             let succeeded = await workspace.generatePDF(
@@ -1080,7 +1075,7 @@ private struct macOSScoreEditorView: View {
         return root.flattened()
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 同じ親の楽譜を並べ替え、失敗時は画面に通知する。
     private func moveScoresWithinGroup(from source: IndexSet, to destination: Int) {
         guard let move = ScoreNavigation.siblingMove(
             in: workspace.document,
@@ -1097,7 +1092,7 @@ private struct macOSScoreEditorView: View {
         } catch { show(error) }
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 階層一覧で上下キーに応じて選択位置を移す。
     private func moveHierarchySelection(_ direction: MoveCommandDirection) {
         guard !flattenedScores.isEmpty else { return }
         let current = hierarchySelectionID.flatMap { id in
@@ -1112,13 +1107,13 @@ private struct macOSScoreEditorView: View {
         hierarchySelectionID = flattenedScores[target].score.id
     }
 
-    /// `confirmHierarchySelection`が担当する処理を実行する。
+    /// 階層一覧で選択中の楽譜を確定する。
     private func confirmHierarchySelection() {
         guard let hierarchySelectionID else { return }
         selectScore(hierarchySelectionID)
     }
 
-    /// 必要なデータを作成して文書へ追加する。
+    /// 選択した方法で派生楽譜を作り、結果をエディタへ反映する。
     private func createDerivedScore() {
         guard derivationKind != .importFiles else {
             isShowingDerivedScoreImport = true
@@ -1155,7 +1150,7 @@ private struct macOSScoreEditorView: View {
         }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 削除対象の楽譜を保持し、確認画面を開く。
     private func requestDeletion(of score: Score) {
         pendingDeletionScoreID = score.id
         pendingDeletionScoreTitle = score.title
@@ -1177,7 +1172,7 @@ private struct macOSScoreEditorView: View {
         } catch { show(error) }
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 指定楽譜を選択し、PDFページまたはエディタ内容を更新する。
     private func selectScore(_ id: UUID) {
         do {
             try workspace.selectScore(id)
@@ -1185,7 +1180,7 @@ private struct macOSScoreEditorView: View {
         } catch { show(error) }
     }
 
-    /// `reloadEditor`が担当する処理を実行する。
+    /// 選択楽譜のソースとタイトルをエディタの入力状態へ読み込む。
     private func reloadEditor() {
         scoreSource = workspace.scoreSource
         processingProgram = workspace.processingProgram
@@ -1193,7 +1188,7 @@ private struct macOSScoreEditorView: View {
         saveError = ""
     }
 
-    /// `renameScore`が担当する処理を実行する。
+    /// 編集した楽譜名を保存し、確定したタイトルを表示する。
     private func renameScore() {
         do {
             try workspace.renameSelectedScore(to: scoreTitleDraft)
@@ -1205,7 +1200,7 @@ private struct macOSScoreEditorView: View {
         }
     }
 
-    /// 画面から要求された操作を処理する。
+    /// 発生したエラーの説明を画面へ表示する。
     private func show(_ error: Error) {
         saveError = error.localizedDescription
         selectedTab = .error

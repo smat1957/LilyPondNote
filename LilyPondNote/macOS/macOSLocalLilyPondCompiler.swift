@@ -10,7 +10,7 @@ actor macOSLocalLilyPondCompiler: LilyPondCompiling {
         self.executableLocator = executableLocator
     }
 
-    /// 入力を処理して生成結果を返す。
+    /// 端末内のLilyPondを実行してPDF・ログ・バージョンを返す。
     func compile(_ input: LilyPondCompilationInput) async throws
         -> LilyPondCompilationResult {
         guard let executableURL = executableLocator.locate() else {
@@ -57,7 +57,7 @@ actor macOSLocalLilyPondCompiler: LilyPondCompiling {
         )
     }
 
-    /// `run`が担当する処理を実行する。
+    /// 指定したLilyPond実行ファイルを起動し、終了コードと出力を集める。
     private func run(_ executableURL: URL, in workURL: URL) async throws
         -> (exitCode: Int32, log: String) {
         try await withCheckedThrowingContinuation { continuation in
@@ -90,9 +90,7 @@ actor macOSLocalLilyPondCompiler: LilyPondCompiling {
         }
     }
 
-    /// GUI applications launched from Finder do not inherit the user's shell
-    /// PATH. LilyPond starts Ghostscript as `gs`, so include the standard
-    /// Homebrew locations explicitly while retaining the inherited PATH.
+    /// Finder起動時にもGhostscriptを見つけられるよう、標準的な実行パスを補う。
     private func environment(for executableURL: URL) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let inheritedPaths = environment["PATH"]?

@@ -17,7 +17,7 @@ enum LilyPondSyntaxStyle: String, CaseIterable, Identifiable {
         }
     }
 
-    /// `colorRole`が担当する処理を実行する。
+    /// 構文要素に割り当てる配色上の役割を返す。
     func colorRole(for face: LilyPondSyntaxFace) -> LilyPondSyntaxColorRole {
         switch (self, face) {
         case (.emacs, .functionName): .blue
@@ -73,7 +73,7 @@ enum LilyPondEditorConfigurationStore {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: syntaxStyleKey) }
     }
 
-    /// `fontSize`が担当する処理を実行する。
+    /// 保存済み文字サイズを読み、無効値なら既定値を返す。
     static func fontSize(defaultValue: Double) -> Double {
         guard UserDefaults.standard.object(forKey: fontSizeKey) != nil else {
             return defaultValue
@@ -81,7 +81,7 @@ enum LilyPondEditorConfigurationStore {
         return UserDefaults.standard.double(forKey: fontSizeKey)
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 選択したエディタ文字サイズを設定へ保存する。
     static func saveFontSize(_ value: Double) {
         UserDefaults.standard.set(value, forKey: fontSizeKey)
     }
@@ -107,6 +107,12 @@ struct LilyPondSyntaxSpan: Sendable {
 
 /// UIや色には依存せず、公式Emacs modeと同じ順序で構文範囲を返す。
 enum LilyPondSyntaxHighlighting {
+    /// 文字列の変更後も選択範囲が範囲外にならないよう補正する。
+    static func clampedSelection(_ range: NSRange, length: Int) -> NSRange {
+        let location = min(max(0, range.location), length)
+        return NSRange(location: location, length: min(range.length, length - location))
+    }
+
     private struct Rule {
         let expression: NSRegularExpression
         let captureGroup: Int
@@ -178,7 +184,7 @@ enum LilyPondSyntaxHighlighting {
         Rule(#"%\{[\s\S]*?%\}|%[^\n]*"#, face: .comment)
     ]
 
-    /// `spans`が担当する処理を実行する。
+    /// LilyPondソースを規則に照らして着色範囲を列挙する。
     static func spans(in text: String) -> [LilyPondSyntaxSpan] {
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
         return rules.flatMap { rule in

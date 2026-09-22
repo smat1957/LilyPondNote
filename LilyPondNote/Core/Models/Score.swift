@@ -2,7 +2,7 @@
 
 import Foundation
 
-struct Score: Codable, Equatable, Identifiable {
+struct Score: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var title: String
     var compilerVersion: String?
@@ -29,7 +29,7 @@ struct ScoreTreeItem: Identifiable {
 }
 
 extension Score {
-    /// `flattened`が担当する処理を実行する。
+    /// 楽譜と子孫を階層の深さ付きで表示順に並べる。
     func flattened(depth: Int = 0) -> [ScoreTreeItem] {
         [ScoreTreeItem(score: self, depth: depth)]
             + children.flatMap { $0.flattened(depth: depth + 1) }
@@ -37,23 +37,23 @@ extension Score {
 }
 
 extension LilyPondNoteDocument {
-    /// `score`が担当する処理を実行する。
+    /// IDに一致する楽譜を階層から探す。
     func score(withID scoreID: UUID) -> Score? {
         scores.lazy.compactMap { $0.score(withID: scoreID) }.first
     }
 
-    /// 必要なデータを作成して文書へ追加する。
+    /// root楽譜を文書の末尾へ追加する。
     mutating func appendRootScore(_ score: Score) {
         scores.append(score)
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// root楽譜を指定位置へ並べ替える。
     mutating func moveRootScores(fromOffsets source: IndexSet, toOffset destination: Int) {
         scores.moveElements(fromOffsets: source, toOffset: destination)
     }
 
     @discardableResult
-    /// 対象の選択または表示位置を変更する。
+    /// 指定した親の子楽譜を兄弟内で並べ替える。
     mutating func moveChildScores(
         of parentID: UUID,
         fromOffsets source: IndexSet,
@@ -68,29 +68,29 @@ extension LilyPondNoteDocument {
     }
 
     @discardableResult
-    /// `renameScore`が担当する処理を実行する。
+    /// 指定IDの楽譜名を階層内で更新する。
     mutating func renameScore(withID scoreID: UUID, to title: String) -> Bool {
         Self.renameScore(scoreID, to: title, in: &scores)
     }
 
     @discardableResult
-    /// `setCompilerVersion`が担当する処理を実行する。
+    /// 指定楽譜のコンパイラバージョンを記録する。
     mutating func setCompilerVersion(_ version: String, for scoreID: UUID) -> Bool {
         Self.setCompilerVersion(version, for: scoreID, in: &scores)
     }
 
-    /// `parentID`が担当する処理を実行する。
+    /// 指定楽譜の親IDを階層から探す。
     func parentID(of scoreID: UUID) -> UUID? {
         Self.parentID(of: scoreID, in: scores, currentParentID: nil)
     }
 
-    /// `rootScore`が担当する処理を実行する。
+    /// 指定楽譜を含むroot楽譜を返す。
     func rootScore(containing scoreID: UUID) -> Score? {
         scores.first { $0.score(withID: scoreID) != nil }
     }
 
     @discardableResult
-    /// 必要なデータを作成して文書へ追加する。
+    /// 指定した親の末尾へ子楽譜を追加する。
     mutating func appendChildScore(_ child: Score, to parentID: UUID) -> Bool {
         Self.append(child, to: parentID, in: &scores)
     }
@@ -101,7 +101,7 @@ extension LilyPondNoteDocument {
         Self.removePromotingChildren(scoreID, from: &scores)
     }
 
-    /// 必要なデータを作成して文書へ追加する。
+    /// 階層を再帰的にたどり、指定した親へ子楽譜を追加する。
     private static func append(
         _ child: Score,
         to parentID: UUID,
@@ -121,7 +121,7 @@ extension LilyPondNoteDocument {
         return false
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 階層内の指定親を探し、その子楽譜を並べ替える。
     private static func moveChildren(
         of parentID: UUID,
         fromOffsets source: IndexSet,
@@ -148,7 +148,7 @@ extension LilyPondNoteDocument {
         return false
     }
 
-    /// `renameScore`が担当する処理を実行する。
+    /// 指定IDの楽譜名を階層内で更新する。
     private static func renameScore(
         _ scoreID: UUID,
         to title: String,
@@ -166,7 +166,7 @@ extension LilyPondNoteDocument {
         return false
     }
 
-    /// `setCompilerVersion`が担当する処理を実行する。
+    /// 指定楽譜のコンパイラバージョンを記録する。
     private static func setCompilerVersion(
         _ version: String,
         for scoreID: UUID,
@@ -206,7 +206,7 @@ extension LilyPondNoteDocument {
         return nil
     }
 
-    /// `parentID`が担当する処理を実行する。
+    /// 指定楽譜の親IDを階層から探す。
     private static func parentID(
         of scoreID: UUID,
         in scores: [Score],
@@ -227,7 +227,7 @@ extension LilyPondNoteDocument {
 }
 
 private extension Array {
-    /// 対象の選択または表示位置を変更する。
+    /// 指定された配列要素を新しい位置へ移す。
     mutating func moveElements(fromOffsets source: IndexSet, toOffset destination: Int) {
         let validSource = source.filter { indices.contains($0) }
         guard !validSource.isEmpty else { return }
@@ -244,7 +244,7 @@ private extension Array {
 }
 
 private extension Score {
-    /// `score`が担当する処理を実行する。
+    /// IDに一致する楽譜を階層から探す。
     func score(withID scoreID: UUID) -> Score? {
         if id == scoreID {
             return self

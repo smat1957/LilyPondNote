@@ -2,7 +2,7 @@
 
 import Foundation
 
-struct LilyPondNoteDocument: Codable, Equatable, Identifiable {
+struct LilyPondNoteDocument: Codable, Equatable, Identifiable, Sendable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int

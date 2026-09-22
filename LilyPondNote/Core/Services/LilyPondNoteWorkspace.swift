@@ -3,8 +3,44 @@
 import Combine
 import Foundation
 
+enum StartupLoadingPhase: Sendable {
+    case locating
+    case validating
+    case copying
+    case opening
+
+    var message: String {
+        switch self {
+        case .locating: String(localized: "前回のNoteを確認しています…")
+        case .validating: String(localized: "Noteの内容を確認しています…")
+        case .copying: String(localized: "Noteを読み込んでいます…")
+        case .opening: String(localized: "楽譜を開いています…")
+        }
+    }
+}
+
+private struct StartupRestoreError: Error, Sendable {
+    let message: String
+}
+
+private struct PreparedStartupRestore: Sendable {
+    struct SelectedScore: Sendable {
+        let id: UUID
+        let source: String
+        let processingProgram: String
+        let pdfData: Data?
+        let errorLog: String
+    }
+
+    let document: LilyPondNoteDocument
+    let sourceURL: URL
+    let workingURL: URL
+    let selectedScore: SelectedScore?
+}
+
 @MainActor
 final class LilyPondNoteWorkspace: ObservableObject {
+    @Published private(set) var startupLoadingPhase: StartupLoadingPhase?
     @Published private(set) var document: LilyPondNoteDocument
     @Published private(set) var selectedScoreID: UUID?
     @Published private(set) var scoreSource = ""
@@ -20,11 +56,13 @@ final class LilyPondNoteWorkspace: ObservableObject {
     private let fileManager: FileManager
     private var compiler: (any LilyPondCompiling)?
     private var workingPackageURL: URL
+    private var hasStartedStartupRestore = false
 
     /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
     init(
         compiler: (any LilyPondCompiling)?,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        restoresOnInitialization: Bool = true
     ) {
         self.compiler = compiler
         self.fileManager = fileManager
@@ -35,7 +73,130 @@ final class LilyPondNoteWorkspace: ObservableObject {
             for: initialDocument.id,
             fileManager: fileManager
         )
-        restoreLastPackageOrCreateEmptyNote()
+        if restoresOnInitialization {
+            restoreLastPackageOrCreateEmptyNote()
+        } else {
+            startupLoadingPhase = .locating
+        }
+    }
+
+    /// iOSでは画面を表示してから、前回のNoteをバックグラウンドで復元する。
+    func restoreAtLaunch() async {
+        guard !hasStartedStartupRestore, startupLoadingPhase != nil else { return }
+        hasStartedStartupRestore = true
+
+        let result = await Task.detached(priority: .userInitiated) {
+            do {
+                return Result<PreparedStartupRestore?, StartupRestoreError>.success(
+                    try await Self.prepareStartupRestore { phase in
+                        await MainActor.run { self.startupLoadingPhase = phase }
+                    }
+                )
+            } catch {
+                return .failure(StartupRestoreError(message: error.localizedDescription))
+            }
+        }.value
+
+        switch result {
+        case .success(let prepared?):
+            document = prepared.document
+            workingPackageURL = prepared.workingURL
+            savedPackageURL = prepared.sourceURL
+            hasUnsavedChanges = false
+            if let selected = prepared.selectedScore {
+                selectedScoreID = selected.id
+                scoreSource = selected.source
+                processingProgram = selected.processingProgram
+                pdfData = selected.pdfData
+                errorLog = selected.errorLog
+                pdfNeedsRegeneration = false
+            } else {
+                clearSelection()
+            }
+        case .success(nil):
+            do {
+                try createEmptyInitialNote()
+            } catch {
+                errorLog = error.localizedDescription
+            }
+        case .failure(let error):
+            PackageBookmarkStore.clear()
+            do {
+                try createEmptyInitialNote()
+                errorLog = String(localized: "最後に開いたPackageを復元できませんでした。")
+                    + "\n" + error.message
+            } catch {
+                errorLog = error.localizedDescription
+            }
+        }
+        startupLoadingPhase = nil
+    }
+
+    /// ブックマーク先を検証・複製し、画面へ反映するデータを別スレッドで準備する。
+    nonisolated private static func prepareStartupRestore(
+        progress: @Sendable (StartupLoadingPhase) async -> Void
+    ) async throws -> PreparedStartupRestore? {
+        guard let resolved = try PackageBookmarkStore.resolve() else { return nil }
+        let accessURLs = [resolved.accessRootURL, resolved.packageURL]
+        var accessedURLs: [URL] = []
+        var accessedPaths: Set<String> = []
+        for url in accessURLs {
+            guard accessedPaths.insert(url.standardizedFileURL.path).inserted else { continue }
+            if url.startAccessingSecurityScopedResource() {
+                accessedURLs.append(url)
+            }
+        }
+        defer {
+            for url in accessedURLs.reversed() {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let fileManager = FileManager()
+        guard fileManager.fileExists(atPath: resolved.packageURL.path) else {
+            PackageBookmarkStore.clear()
+            return nil
+        }
+        let store = LilyPondNotePackageStore(fileManager: fileManager)
+        await progress(.validating)
+        var document = try store.loadDocument(from: resolved.packageURL)
+        try store.validatePackage(for: document, at: resolved.packageURL)
+        let workingURL = workingURL(for: document.id, fileManager: fileManager)
+        await progress(.copying)
+        try store.copyPackage(from: resolved.packageURL, to: workingURL)
+        await progress(.opening)
+        let selectedScore: PreparedStartupRestore.SelectedScore?
+        if let first = document.scores.first {
+            guard let files = store.fileSet(
+                for: first.id,
+                in: document,
+                packageURL: workingURL
+            ) else {
+                throw CocoaError(.fileReadNoSuchFile)
+            }
+            selectedScore = .init(
+                id: first.id,
+                source: try store.readScoreData(from: files),
+                processingProgram: try store.readProcessingProgram(from: files),
+                pdfData: try store.readPDF(from: files),
+                errorLog: try store.readCompileLog(from: files)
+            )
+        } else {
+            selectedScore = nil
+        }
+        if let selectedScore,
+           document.score(withID: selectedScore.id)?.compilerVersion == nil,
+           let pdfData = selectedScore.pdfData,
+           let version = LilyPondCompilerVersion.detected(inPDF: pdfData),
+           document.setCompilerVersion(version, for: selectedScore.id) {
+            try store.saveMetadata(for: document, at: workingURL)
+        }
+        return PreparedStartupRestore(
+            document: document,
+            sourceURL: resolved.packageURL,
+            workingURL: workingURL,
+            selectedScore: selectedScore
+        )
     }
 
     var selectedScore: Score? {
@@ -54,7 +215,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         errorLog = ""
     }
 
-    /// `newNote`が担当する処理を実行する。
+    /// 空のNoteを作成し、現在の作業対象へ切り替える。
     func newNote(title: String = String(localized: "名称未設定")) throws {
         let newDocument = LilyPondNoteDocument(title: title)
         let url = Self.workingURL(for: newDocument.id, fileManager: fileManager)
@@ -67,7 +228,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         PackageBookmarkStore.clear()
     }
 
-    /// `renameNote`が担当する処理を実行する。
+    /// Note名を検証してメタデータへ保存する。
     func renameNote(to title: String) throws {
         let normalized = try validatedNoteName(title)
         guard normalized != document.title else { return }
@@ -76,7 +237,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         hasUnsavedChanges = true
     }
 
-    /// `renameSelectedScore`が担当する処理を実行する。
+    /// 選択中の楽譜名を更新し、メタデータへ保存する。
     func renameSelectedScore(to title: String) throws {
         guard let selectedScoreID else { throw WorkspaceError.scoreIsNotSelected }
         let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -102,7 +263,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
     }
 
     @discardableResult
-    /// 必要なデータを作成して文書へ追加する。
+    /// 新しいroot楽譜とファイル群を作成して選択する。
     func createRootScore(title: String) throws -> UUID {
         let score = Score(title: title)
         _ = try store.createFileSet(
@@ -116,18 +277,6 @@ final class LilyPondNoteWorkspace: ObservableObject {
         try selectScore(score.id)
         hasUnsavedChanges = true
         return score.id
-    }
-
-    @discardableResult
-    /// `importRootScore`が担当する処理を実行する。
-    func importRootScore(from sourceURL: URL) throws -> UUID {
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let title = sourceURL.deletingPathExtension().lastPathComponent
-        return try importRootScore(
-            title: title,
-            scoreSource: source,
-            processingProgram: LilyPondTemplates.initialProcessingProgram
-        )
     }
 
     @discardableResult
@@ -156,7 +305,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
     }
 
     @discardableResult
-    /// 必要なデータを作成して文書へ追加する。
+    /// 選択中の楽譜の下に子楽譜とファイル群を作成する。
     func createChildScore(
         title: String,
         scoreSource: String? = nil,
@@ -220,14 +369,14 @@ final class LilyPondNoteWorkspace: ObservableObject {
         hasUnsavedChanges = true
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// root楽譜を指定位置へ並べ替える。
     func moveRootScores(fromOffsets source: IndexSet, toOffset destination: Int) throws {
         document.moveRootScores(fromOffsets: source, toOffset: destination)
         try store.saveMetadata(for: document, at: workingPackageURL)
         hasUnsavedChanges = true
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 同じ親を持つ楽譜の順序を更新して保存する。
     func moveScoresWithinGroup(
         parentID: UUID,
         fromOffsets source: IndexSet,
@@ -244,7 +393,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         hasUnsavedChanges = true
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 楽譜を選択し、そのソース・PDF・ログを作業状態へ読み込む。
     func selectScore(_ scoreID: UUID) throws {
         guard document.score(withID: scoreID) != nil,
               let fileSet = store.fileSet(
@@ -268,7 +417,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         pdfNeedsRegeneration = false
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 編集した楽譜ソースと処理手続きを作業用Packageへ保存する。
     func saveScore(scoreSource: String, processingProgram: String) throws {
         let fileSet = try selectedFileSet()
         try store.writeScoreData(scoreSource, to: fileSet)
@@ -280,13 +429,13 @@ final class LilyPondNoteWorkspace: ObservableObject {
         hasUnsavedChanges = true
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// 指定Packageを開き、次回復元用のブックマークを保存する。
     func openPackage(at sourceURL: URL) throws {
         try loadPackage(at: sourceURL)
         try PackageBookmarkStore.save(sourceURL)
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// Packageを検証・複製し、先頭楽譜を選択する。
     private func loadPackage(at sourceURL: URL) throws {
         let openedDocument = try store.loadDocument(from: sourceURL)
         try store.validatePackage(for: openedDocument, at: sourceURL)
@@ -306,7 +455,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         }
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 作業用Packageを指定名で保存し、現在の保存先を更新する。
     func savePackageAs(
         to destinationURL: URL,
         noteTitle: String,
@@ -336,13 +485,13 @@ final class LilyPondNoteWorkspace: ObservableObject {
         }
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 選択中の楽譜ファイル群を指定先へ書き出す。
     func exportSelectedScore(to destinationURL: URL) throws {
         let fileSet = try selectedFileSet()
         try store.exportFileSet(fileSet, to: destinationURL)
     }
 
-    /// 入力を処理して生成結果を返す。
+    /// 現在のコンパイラでPDFを生成し、結果とログを保存する。
     func generatePDF(scoreSource: String, processingProgram: String) async -> Bool {
         guard !isCompiling else { return false }
         guard let compiler else {
@@ -391,7 +540,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         }
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// 前回のPackageを復元し、失敗時は空のNoteを用意する。
     private func restoreLastPackageOrCreateEmptyNote() {
         do {
             guard let resolved = try PackageBookmarkStore.resolve() else {
@@ -431,7 +580,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         }
     }
 
-    /// 必要なデータを作成して文書へ追加する。
+    /// 初期表示用の空のNoteと作業用Packageを作る。
     private func createEmptyInitialNote() throws {
         let initialDocument = LilyPondNoteDocument(title: String(localized: "名称未設定"))
         let url = Self.workingURL(for: initialDocument.id, fileManager: fileManager)
@@ -443,7 +592,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         clearSelection()
     }
 
-    /// 対象の選択または表示位置を変更する。
+    /// 選択中の楽譜に対応するファイル群を取得する。
     private func selectedFileSet() throws -> ScoreFileSet {
         let scoreID = try requireSelectedScoreID()
         guard let fileSet = store.fileSet(
@@ -470,8 +619,8 @@ final class LilyPondNoteWorkspace: ObservableObject {
         pdfNeedsRegeneration = false
     }
 
-    /// `workingURL`が担当する処理を実行する。
-    private static func workingURL(
+    /// 文書IDから作業用Packageの保存先を組み立てる。
+    nonisolated private static func workingURL(
         for documentID: UUID,
         fileManager: FileManager
     ) -> URL {

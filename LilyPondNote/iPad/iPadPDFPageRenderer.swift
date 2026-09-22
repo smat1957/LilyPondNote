@@ -1,4 +1,4 @@
-// PDFデータをページ単位の画像へ描画する共通処理を提供する。
+// iPadのページ送り表示に使うPDFページ画像を生成する。
 
 import CoreGraphics
 import Foundation
@@ -22,7 +22,7 @@ struct RenderedPDFPage: Identifiable {
 enum PDFPageRenderer {
     private static let pixelHeight = 1800
 
-    /// 入力を処理して生成結果を返す。
+    /// PDFの各ページを識別可能な表示用データへ分解する。
     static func render(data: Data) -> [RenderedPDFPage] {
         guard let document = PDFDocument(data: data) else { return [] }
         let documentFingerprint = data.hashValue
@@ -36,14 +36,14 @@ enum PDFPageRenderer {
         }
     }
 
-    /// 入力を処理して生成結果を返す。
+    /// 指定ページをCGImageとして描画する。
     static func renderPage(data: Data, index: Int) -> CGImage? {
         guard let document = PDFDocument(data: data),
               let pdfPage = document.page(at: index)?.pageRef else { return nil }
         return render(pdfPage: pdfPage)
     }
 
-    /// 入力を処理して生成結果を返す。
+    /// PDFの各ページを識別可能な表示用データへ分解する。
     private static func render(pdfPage: CGPDFPage) -> CGImage? {
         let bounds = pdfPage.getBoxRect(.cropBox)
         guard bounds.width > 0, bounds.height > 0 else { return nil }

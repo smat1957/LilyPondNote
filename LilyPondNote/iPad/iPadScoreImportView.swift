@@ -73,6 +73,7 @@ struct iPadScoreImportView: View {
         scoreData != nil && !scoreTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// 選択状態とファイル名を示すiPad用の行を作る。
     private func fileRow(title: LocalizedStringKey, detail: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack {
@@ -87,11 +88,13 @@ struct iPadScoreImportView: View {
         }
     }
 
+    /// 次に選ぶファイルの役割を保存してファイル選択を開く。
     private func select(_ role: FileRole) {
         selectingRole = role
         isSelectingFile = true
     }
 
+    /// 選択したLilyPondファイルを読み、楽譜または処理手続きへ割り当てる。
     private func handleSelection(_ result: Result<URL, Error>) {
         defer { selectingRole = nil }
         do {
@@ -119,6 +122,7 @@ struct iPadScoreImportView: View {
         }
     }
 
+    /// Coreのインポート処理を実行し、警告か完了を画面へ反映する。
     private func performImport() {
         do {
             let warning = try ScoreImportService.importScore(
@@ -136,6 +140,7 @@ struct iPadScoreImportView: View {
         } catch { errorMessage = error.localizedDescription }
     }
 
+    /// 警告を閉じ、親画面へ完了を通知してシートを閉じる。
     private func finishImport() {
         warningMessage = ""
         onImported()

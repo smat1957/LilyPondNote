@@ -61,7 +61,7 @@ struct macOSServerSettingsView: View {
         }
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// 接続先・移調方法・エディタ設定を保存する。
     private func saveSettings() {
         RemoteLilyPondConfigurationStore.savedTransposeMode = transposeMode
         LilyPondEditorConfigurationStore.syntaxStyle = syntaxStyle

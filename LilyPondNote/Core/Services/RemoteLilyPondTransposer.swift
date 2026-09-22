@@ -3,7 +3,7 @@
 import Foundation
 
 enum RemoteLilyPondTransposer {
-    /// 入力を処理して生成結果を返す。
+    /// 認証付きでサーバーへ移調を依頼し、変換後のソースを受け取る。
     static func transpose(
         source: String,
         from sourcePitch: String,

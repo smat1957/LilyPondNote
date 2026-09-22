@@ -39,7 +39,7 @@ enum RemoteLilyPondConfigurationStore {
         UserDefaults.standard.string(forKey: emailKey) ?? ""
     }
 
-    /// 対象データを保存先へ書き込む。
+    /// ログイン情報をKeychainへ保存し、接続先とメールを記憶する。
     static func save(
         session: RemoteLilyPondAuthentication.Session,
         email: String
@@ -70,7 +70,7 @@ enum RemoteLilyPondConfigurationStore {
         )
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// 保存済み認証情報からリモートコンパイラを構成する。
     static func loadCompiler() -> (any LilyPondCompiling)? {
         guard let session = loadSession() else { return nil }
         return RemoteLilyPondCompiler(
@@ -79,7 +79,7 @@ enum RemoteLilyPondConfigurationStore {
         )
     }
 
-    /// 保存済みデータを読み込み状態へ反映する。
+    /// 保存済みURLとKeychainのトークンを読み込む。
     static func loadSession() -> (serverURL: URL, accessToken: String)? {
         guard let url = try? RemoteLilyPondAuthentication.validatedServerURL(
             savedServerURL

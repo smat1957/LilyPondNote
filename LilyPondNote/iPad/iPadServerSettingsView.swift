@@ -90,7 +90,10 @@ struct iPadServerSettingsView: View {
                 RemoteLilyPondConfigurationStore.savedTransposeMode = transposeMode
                 LilyPondEditorConfigurationStore.syntaxStyle = syntaxStyle
                 LilyPondEditorConfigurationStore.saveFontSize(editorFontSize)
-                rememberCurrentInput()
+                RemoteLilyPondConfigurationStore.remember(
+                    serverURL: serverURL,
+                    email: email
+                )
             }
         }
     }
@@ -105,7 +108,10 @@ struct iPadServerSettingsView: View {
     /// 認証状態を更新する。
     private func login() {
         // 接続に失敗した場合でも、次回は直前の入力値から再開できるようにする。
-        rememberCurrentInput()
+        RemoteLilyPondConfigurationStore.remember(
+            serverURL: serverURL,
+            email: email
+        )
         isLoggingIn = true
         Task {
             defer { isLoggingIn = false }
@@ -132,13 +138,5 @@ struct iPadServerSettingsView: View {
                 message = error.localizedDescription
             }
         }
-    }
-
-    /// ログインに入力した接続先とメールアドレスを保存する。
-    private func rememberCurrentInput() {
-        RemoteLilyPondConfigurationStore.remember(
-            serverURL: serverURL,
-            email: email
-        )
     }
 }

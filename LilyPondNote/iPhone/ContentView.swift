@@ -211,10 +211,14 @@ struct ContentView: View {
                 .padding(.vertical, 8)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
             HStack {
-                Button("新規作成", systemImage: "plus") {
+                Button {
                     isShowingRootCreationOptions = true
+                } label: {
+                    Image(systemName: "plus")
+                        .modifier(iPhoneGlassCircleControlModifier())
                 }
                 .labelStyle(.iconOnly)
+                .accessibilityLabel("新規作成")
                 Spacer()
                 if workspace.hasUnsavedChanges {
                     Image(systemName: "circle.fill")
@@ -241,8 +245,10 @@ struct ContentView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
+                        .modifier(iPhoneGlassCircleControlModifier())
                 }
                 .labelStyle(.iconOnly)
+                .accessibilityLabel("Noteの操作")
             }
         }
         .padding(.horizontal, 14)
@@ -274,19 +280,32 @@ struct ContentView: View {
             }
             Spacer()
             if workspace.selectedScore != nil {
-                Button("編集", systemImage: "pencil") { isEditing = true }
-                    .fixedSize()
-                Menu {
-                    Button("印刷", systemImage: "printer") { printPDF() }
-                        .disabled(workspace.pdfData == nil)
-                    Button("エクスポート", systemImage: "square.and.arrow.up") {
-                        beginFileOperation(.exportScore)
+                HStack(spacing: 8) {
+                    Button {
+                        isEditing = true
+                    } label: {
+                        Label("編集", systemImage: "pencil")
+                            .modifier(iPhoneGlassCapsuleControlModifier())
                     }
-                    Divider()
-                    Button("削除", role: .destructive) {
-                        isConfirmingScoreDeletion = true
+                    .buttonStyle(.plain)
+
+                    Menu {
+                        Button("印刷", systemImage: "printer") { printPDF() }
+                            .disabled(workspace.pdfData == nil)
+                        Button("エクスポート", systemImage: "square.and.arrow.up") {
+                            beginFileOperation(.exportScore)
+                        }
+                        Divider()
+                        Button("削除", role: .destructive) {
+                            isConfirmingScoreDeletion = true
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .modifier(iPhoneGlassCircleControlModifier())
                     }
-                } label: { Image(systemName: "ellipsis.circle") }
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("楽譜の操作")
+                }
             }
         }
         .padding(.horizontal, 14)

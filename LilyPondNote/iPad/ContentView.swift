@@ -401,8 +401,10 @@ struct ContentView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
+                        .modifier(iPadGlassCircleControlModifier())
                 }
                 .labelStyle(.iconOnly)
+                .accessibilityLabel("Noteの操作")
             }
         }
         .padding(.horizontal, 18)
@@ -439,22 +441,33 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 Spacer()
                 if workspace.selectedScore != nil {
-                    Button("編集", systemImage: "pencil") { isEditing = true }
-                        .fixedSize()
-                    Menu {
-                        Button("印刷", systemImage: "printer") {
-                            printPDF()
+                    HStack(spacing: 10) {
+                        Button {
+                            isEditing = true
+                        } label: {
+                            Label("編集", systemImage: "pencil")
+                                .modifier(iPadGlassCapsuleControlModifier())
                         }
-                        .disabled(workspace.pdfData == nil)
-                        Button("エクスポート", systemImage: "square.and.arrow.up") {
-                            beginFileOperation(.exportScore)
+                        .buttonStyle(.plain)
+
+                        Menu {
+                            Button("印刷", systemImage: "printer") {
+                                printPDF()
+                            }
+                            .disabled(workspace.pdfData == nil)
+                            Button("エクスポート", systemImage: "square.and.arrow.up") {
+                                beginFileOperation(.exportScore)
+                            }
+                            Divider()
+                            Button("削除", systemImage: "trash", role: .destructive) {
+                                isConfirmingScoreDeletion = true
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .modifier(iPadGlassCircleControlModifier())
                         }
-                        Divider()
-                        Button("削除", systemImage: "trash", role: .destructive) {
-                            isConfirmingScoreDeletion = true
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("楽譜の操作")
                     }
                 }
             }

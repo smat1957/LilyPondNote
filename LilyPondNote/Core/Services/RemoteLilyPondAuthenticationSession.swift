@@ -20,7 +20,7 @@ final class RemoteLilyPondAuthenticationSession: ObservableObject {
         return account
     }
 
-    /// 認証状態を更新する。
+    /// 保存済みセッションをサーバーで検証し、アカウント情報または失敗状態を反映する。
     func refresh() async {
         state = .checking
         guard let saved = RemoteLilyPondConfigurationStore.loadSession() else {
@@ -45,12 +45,12 @@ final class RemoteLilyPondAuthenticationSession: ObservableObject {
         }
     }
 
-    /// 認証状態を更新する。
+    /// ログイン応答のアカウントを現在の認証済み状態として保持する。
     func didLogin(_ session: RemoteLilyPondAuthentication.Session) {
         state = .signedIn(session.account)
     }
 
-    /// 認証状態を更新する。
+    /// 保存済み認証情報を削除し、共有認証状態をログアウトへ戻す。
     func logout() {
         RemoteLilyPondConfigurationStore.logout()
         state = .signedOut

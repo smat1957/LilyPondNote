@@ -105,7 +105,7 @@ struct iPadServerSettingsView: View {
         )
     }
 
-    /// 認証状態を更新する。
+    /// 入力した接続先と資格情報でログインし、成功時は共有セッションとWorkspaceへ反映する。
     private func login() {
         // 接続に失敗した場合でも、次回は直前の入力値から再開できるようにする。
         RemoteLilyPondConfigurationStore.remember(

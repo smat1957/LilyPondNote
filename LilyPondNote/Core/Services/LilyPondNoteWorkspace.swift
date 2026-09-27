@@ -58,11 +58,10 @@ final class LilyPondNoteWorkspace: ObservableObject {
     private var workingPackageURL: URL
     private var hasStartedStartupRestore = false
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// コンパイラとファイル操作を受け取り、画面表示後に復元を開始できる初期状態を作る。
     init(
         compiler: (any LilyPondCompiling)?,
-        fileManager: FileManager = .default,
-        restoresOnInitialization: Bool = true
+        fileManager: FileManager = .default
     ) {
         self.compiler = compiler
         self.fileManager = fileManager
@@ -73,14 +72,10 @@ final class LilyPondNoteWorkspace: ObservableObject {
             for: initialDocument.id,
             fileManager: fileManager
         )
-        if restoresOnInitialization {
-            restoreLastPackageOrCreateEmptyNote()
-        } else {
-            startupLoadingPhase = .locating
-        }
+        startupLoadingPhase = .locating
     }
 
-    /// iOSでは画面を表示してから、前回のNoteをバックグラウンドで復元する。
+    /// 画面表示後に前回のNoteをバックグラウンドで復元し、完了までの段階を公開する。
     func restoreAtLaunch() async {
         guard !hasStartedStartupRestore, startupLoadingPhase != nil else { return }
         hasStartedStartupRestore = true
@@ -251,7 +246,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
     }
 
     @discardableResult
-    /// 入力または対象の有効性を確認する。
+    /// Note名の前後空白を除去し、空文字やファイル名に使えない区切り文字を拒否する。
     func validatedNoteName(_ title: String) throws -> String {
         let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty,
@@ -334,7 +329,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         return child.id
     }
 
-    /// 対象データまたは保持状態を削除する。
+    /// 現在選択中の楽譜を特定し、子を昇格させながら削除する共通処理へ渡す。
     func deleteSelectedScore() throws {
         guard let scoreID = selectedScoreID else {
             throw WorkspaceError.scoreIsNotSelected
@@ -342,7 +337,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
         try deleteScore(scoreID)
     }
 
-    /// 対象データまたは保持状態を削除する。
+    /// 指定楽譜のファイルとモデルを削除し、子の昇格と選択状態の維持を整合させる。
     func deleteScore(_ scoreID: UUID) throws {
         guard document.score(withID: scoreID) != nil else {
             throw WorkspaceError.scoreNotFound(scoreID)
@@ -432,7 +427,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
     /// 指定Packageを開き、次回復元用のブックマークを保存する。
     func openPackage(at sourceURL: URL) throws {
         try loadPackage(at: sourceURL)
-        try PackageBookmarkStore.save(sourceURL)
+        try PackageBookmarkStore.save(packageURL: sourceURL)
     }
 
     /// Packageを検証・複製し、先頭楽譜を選択する。
@@ -540,46 +535,6 @@ final class LilyPondNoteWorkspace: ObservableObject {
         }
     }
 
-    /// 前回のPackageを復元し、失敗時は空のNoteを用意する。
-    private func restoreLastPackageOrCreateEmptyNote() {
-        do {
-            guard let resolved = try PackageBookmarkStore.resolve() else {
-                try createEmptyInitialNote()
-                return
-            }
-            let accessURLs = [resolved.accessRootURL, resolved.packageURL]
-            var accessedURLs: [URL] = []
-            var accessedPaths: Set<String> = []
-            for url in accessURLs {
-                let path = url.standardizedFileURL.path
-                guard accessedPaths.insert(path).inserted else { continue }
-                if url.startAccessingSecurityScopedResource() {
-                    accessedURLs.append(url)
-                }
-            }
-            defer {
-                for url in accessedURLs.reversed() {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
-            guard fileManager.fileExists(atPath: resolved.packageURL.path) else {
-                PackageBookmarkStore.clear()
-                try createEmptyInitialNote()
-                return
-            }
-            try loadPackage(at: resolved.packageURL)
-        } catch {
-            PackageBookmarkStore.clear()
-            do {
-                try createEmptyInitialNote()
-                errorLog = String(localized: "最後に開いたPackageを復元できませんでした。") + "\n"
-                    + error.localizedDescription
-            } catch {
-                errorLog = error.localizedDescription
-            }
-        }
-    }
-
     /// 初期表示用の空のNoteと作業用Packageを作る。
     private func createEmptyInitialNote() throws {
         let initialDocument = LilyPondNoteDocument(title: String(localized: "名称未設定"))
@@ -603,13 +558,13 @@ final class LilyPondNoteWorkspace: ObservableObject {
         return fileSet
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// 選択中の楽譜IDを返し、未選択なら保存処理に使う共通エラーを送出する。
     private func requireSelectedScoreID() throws -> UUID {
         guard let selectedScoreID else { throw WorkspaceError.scoreIsNotSelected }
         return selectedScoreID
     }
 
-    /// 対象データまたは保持状態を削除する。
+    /// 楽譜選択に付随するソース、PDF、ログ、再生成状態を未選択状態へ戻す。
     private func clearSelection() {
         selectedScoreID = nil
         scoreSource = ""

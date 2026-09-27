@@ -7,8 +7,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var workspace = LilyPondNoteWorkspace(
-        compiler: RemoteLilyPondConfigurationStore.loadCompiler(),
-        restoresOnInitialization: false
+        compiler: RemoteLilyPondConfigurationStore.loadCompiler()
     )
     @State private var isEditing = false
     @State private var isShowingServerSettings = false
@@ -57,20 +56,7 @@ struct ContentView: View {
         .background(.background)
         .overlay {
             if let phase = workspace.startupLoadingPhase {
-                ZStack {
-                    Color.black.opacity(0.18)
-                        .ignoresSafeArea()
-                    VStack(spacing: 14) {
-                        ProgressView()
-                            .controlSize(.large)
-                        Text(phase.message)
-                            .font(.headline)
-                    }
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 24)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-                    .shadow(radius: 12)
-                }
+                iPhoneStartupLoadingView(phase: phase)
             }
         }
     }
@@ -513,64 +499,13 @@ struct ContentView: View {
     }
 }
 
-private struct iPhoneCollapsibleScoreRow: View {
-    let item: ScoreTreeItem
-    @Binding var expandedScoreIDs: Set<UUID>
-    var isSelected = false
-    let select: () -> Void
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if item.score.children.isEmpty {
-                Color.clear.frame(width: 22, height: 22)
-            } else {
-                Button {
-                    if expandedScoreIDs.contains(item.score.id) {
-                        expandedScoreIDs.remove(item.score.id)
-                    } else {
-                        expandedScoreIDs.insert(item.score.id)
-                    }
-                } label: {
-                    Image(systemName: expandedScoreIDs.contains(item.score.id)
-                          ? "chevron.down" : "chevron.right")
-                        .frame(width: 22, height: 22)
-                }
-                .buttonStyle(.plain)
-            }
-            Button(action: select) {
-                Label(
-                    item.score.title,
-                    systemImage: item.score.children.isEmpty ? "music.note" : "folder.fill"
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
-                .shadow(
-                    color: isSelected ? Color.black.opacity(0.22) : Color.clear,
-                    radius: 4,
-                    y: 2
-                )
-        }
-        .padding(.leading, CGFloat(item.depth) * 16)
-        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-        .listRowSeparator(.hidden)
-    }
-}
-
 private struct iPhonePDFView: UIViewRepresentable {
     let data: Data
     @Binding var currentPage: Int
     let onVerticalSwipe: (Int) -> Void
     let onLeadingEdgeSwipe: () -> Void
 
-    /// 画面部品の構築または状態反映を行う。
+    /// PDFページとスワイプ操作をSwiftUIへ通知するCoordinatorを生成する。
     func makeCoordinator() -> Coordinator {
         Coordinator(
             displayedData: data,
@@ -580,7 +515,7 @@ private struct iPhonePDFView: UIViewRepresentable {
         )
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// 横方向の単一ページ表示とスワイプ認識を備えたPDFKitビューを生成する。
     func makeUIView(context: Context) -> PDFView {
         let view = PDFView()
         view.displayMode = .singlePage
@@ -598,7 +533,7 @@ private struct iPhonePDFView: UIViewRepresentable {
         return view
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// PDFデータが変わった場合だけ文書を差し替え、表示倍率とページ番号を初期化する。
     func updateUIView(_ view: PDFView, context: Context) {
         if context.coordinator.shouldDisplay(data) {
             view.document = PDFDocument(data: data)
@@ -607,7 +542,7 @@ private struct iPhonePDFView: UIViewRepresentable {
         }
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// PDFKitビューの破棄時にページ変更通知の監視を解除する。
     static func dismantleUIView(_ uiView: PDFView, coordinator: Coordinator) {
         coordinator.stopObserving()
     }
@@ -627,7 +562,7 @@ private struct iPhonePDFView: UIViewRepresentable {
         private let onVerticalSwipe: (Int) -> Void
         private let onLeadingEdgeSwipe: () -> Void
 
-        /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+        /// 表示中PDF、現在ページ、各スワイプ通知を保持してUIKitとの同期を準備する。
         init(
             displayedData: Data,
             currentPage: Binding<Int>,
@@ -720,11 +655,11 @@ private struct iPhoneScoreEditorView: View {
     @State private var saveError = ""
     @State private var childTitle = ""
     @State private var isSelectingScore = false
-    @State private var isConfirmingDeletion = false
     @State private var scoreTitleDraft: String
     @FocusState private var isScoreTitleFocused: Bool
     @State private var sourcePitch = "c"
-    @State private var destinationPitch = "a"
+    @State private var destinationPitch = "g"
+    @State private var destinationOctave: LilyPondTransposeOctave = .unchanged
     @State private var isTransposing = false
     @State private var derivationKind: ScoreDerivationKind = .new
     @State private var isShowingDerivationSheet = false
@@ -732,8 +667,11 @@ private struct iPhoneScoreEditorView: View {
     @State private var editorFontSize: Double
     @State private var expandedScoreIDs: Set<UUID> = []
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// 選択中楽譜を編集用状態へ複製し、移調元と属調の初期値も設定する。
     init(workspace: LilyPondNoteWorkspace) {
+        let transposeDefaults = LilyPondTransposePitchSelection.defaultPitches(
+            for: workspace.scoreSource
+        )
         self.workspace = workspace
         _scoreSource = State(initialValue: workspace.scoreSource)
         _processingProgram = State(initialValue: workspace.processingProgram)
@@ -741,6 +679,8 @@ private struct iPhoneScoreEditorView: View {
         _editorFontSize = State(
             initialValue: LilyPondEditorConfigurationStore.fontSize(defaultValue: 17)
         )
+        _sourcePitch = State(initialValue: transposeDefaults.source)
+        _destinationPitch = State(initialValue: transposeDefaults.destination)
     }
 
     var body: some View {
@@ -769,16 +709,12 @@ private struct iPhoneScoreEditorView: View {
                     Button("派生楽譜", systemImage: "plus.square.on.square") {
                         childTitle = ""
                         derivationKind = .new
+                        resetTransposeSelection()
                         isShowingDerivationSheet = true
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bordered)
                     .disabled(isTransposing)
-                    Button("削除", systemImage: "trash", role: .destructive) {
-                        isConfirmingDeletion = true
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.bordered)
                     Menu {
                         Picker("文字サイズ", selection: $editorFontSize) {
                             ForEach(LilyPondEditorConfigurationStore.availableFontSizes, id: \.self) { size in
@@ -846,16 +782,8 @@ private struct iPhoneScoreEditorView: View {
                     .onMove(perform: moveScoresWithinGroup)
                 }
                 .navigationTitle("グループ内楽譜の選択")
+                .navigationBarTitleDisplayMode(.inline)
             }
-        }
-        .alert("楽譜を削除しますか？", isPresented: $isConfirmingDeletion) {
-            Button("削除", role: .destructive) { deleteScore() }
-            Button("キャンセル", role: .cancel) {}
-        } message: {
-            Text(String(
-                format: String(localized: "score.delete.message"),
-                workspace.selectedScore?.title ?? String(localized: "選択中の楽譜")
-            ))
         }
     }
 
@@ -880,8 +808,24 @@ private struct iPhoneScoreEditorView: View {
                 }
                 if derivationKind == .transpose {
                     Section("移調設定") {
-                        TextField("移調元（例: c）", text: $sourcePitch)
-                        TextField("移調先（例: a）", text: $destinationPitch)
+                        Picker("移調元", selection: $sourcePitch) {
+                            ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
+                                Text($0).tag($0)
+                            }
+                        }
+                        HStack {
+                            Picker("移調先", selection: $destinationPitch) {
+                                ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
+                                    Text($0).tag($0)
+                                }
+                            }
+                            Picker("オクターブ", selection: $destinationOctave) {
+                                ForEach(LilyPondTransposeOctave.allCases) { octave in
+                                    Text(octave.displayName).tag(octave)
+                                }
+                            }
+                            .labelsHidden()
+                        }
                         Text(String(
                             format: String(localized: "transpose.create.message"),
                             RemoteLilyPondConfigurationStore.savedTransposeMode.displayName
@@ -893,6 +837,9 @@ private struct iPhoneScoreEditorView: View {
             }
             .navigationTitle("派生楽譜の生成")
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: derivationKind) { _, kind in
+                if kind == .transpose { resetTransposeSelection() }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("キャンセル") { isShowingDerivationSheet = false }
@@ -1019,7 +966,7 @@ private struct iPhoneScoreEditorView: View {
         let title = childTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         let source = sourcePitch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let destination = destinationPitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let destination = destinationOctave.applying(to: destinationPitch)
         guard derivationKind != .transpose || (!source.isEmpty && !destination.isEmpty) else {
             saveError = String(localized: "子楽譜名、移調元、移調先を入力してください。")
             selectedTab = .error
@@ -1045,12 +992,12 @@ private struct iPhoneScoreEditorView: View {
         }
     }
 
-    /// 対象データまたは保持状態を削除する。
-    private func deleteScore() {
-        do {
-            try workspace.deleteSelectedScore()
-            dismiss()
-        } catch { show(error) }
+    /// 編集中の楽譜から移調元と属調を読み取り、移調画面の初期値へ反映する。
+    private func resetTransposeSelection() {
+        let defaults = LilyPondTransposePitchSelection.defaultPitches(for: scoreSource)
+        sourcePitch = defaults.source
+        destinationPitch = defaults.destination
+        destinationOctave = .unchanged
     }
 
     /// 指定楽譜を選択し、PDFページまたはエディタ内容を更新する。

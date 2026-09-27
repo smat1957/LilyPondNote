@@ -16,7 +16,7 @@ struct LilyPondCompilationResult: Sendable {
 }
 
 enum LilyPondCompilerVersion {
-    /// 入力または対象の有効性を確認する。
+    /// コンパイルログからLilyPondのバージョン番号を抽出し、見つからなければnilを返す。
     static func detected(in log: String) -> String? {
         let pattern = #"(?:GNU\s+)?LilyPond\s+([0-9]+(?:\.[0-9]+){1,3})"#
         guard let expression = try? NSRegularExpression(pattern: pattern),
@@ -28,7 +28,7 @@ enum LilyPondCompilerVersion {
         return String(log[range])
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// PDFのCreator属性を読み、そこに含まれるLilyPondのバージョン番号を返す。
     static func detected(inPDF data: Data) -> String? {
         guard let document = PDFDocument(data: data),
               let creator = document.documentAttributes?[

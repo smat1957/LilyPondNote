@@ -8,10 +8,10 @@ struct iPadLilyPondSourceEditor: UIViewRepresentable {
     @Binding var text: String
     let fontSize: Double
 
-    /// 画面部品の構築または状態反映を行う。
+    /// UIKitのテキストビューとSwiftUIのBindingを接続するCoordinatorを生成する。
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// 入力補正を無効化し、iPadに適した余白を持つソース編集ビューを生成する。
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView()
         view.delegate = context.coordinator
@@ -31,7 +31,7 @@ struct iPadLilyPondSourceEditor: UIViewRepresentable {
         return view
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// SwiftUIから渡された本文、文字サイズ、配色設定を既存ビューへ反映する。
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.parent = self
         if view.text != text { context.coordinator.setText(text) }
@@ -45,7 +45,7 @@ struct iPadLilyPondSourceEditor: UIViewRepresentable {
         private var appliedFontSize: Double?
         private var appliedSyntaxStyle: LilyPondSyntaxStyle?
 
-        /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+        /// 親Editorを保持し、UIKitからの編集通知をSwiftUIへ戻せる状態を作る。
         init(parent: iPadLilyPondSourceEditor) { self.parent = parent }
 
         /// テキスト変更を親Viewへ反映して構文着色を更新する。
@@ -66,7 +66,7 @@ struct iPadLilyPondSourceEditor: UIViewRepresentable {
             isHighlighting = false
         }
 
-        /// 画面部品の構築または状態反映を行う。
+        /// 文字サイズまたは配色設定が変わった場合に限り、構文着色を更新する。
         func updateConfigurationIfNeeded() {
             guard let textView else { return }
             let fontSize = parent.fontSize

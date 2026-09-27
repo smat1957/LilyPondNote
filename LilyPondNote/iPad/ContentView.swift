@@ -8,8 +8,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var workspace = LilyPondNoteWorkspace(
-        compiler: RemoteLilyPondConfigurationStore.loadCompiler(),
-        restoresOnInitialization: false
+        compiler: RemoteLilyPondConfigurationStore.loadCompiler()
     )
     @StateObject private var authenticationSession =
         RemoteLilyPondAuthenticationSession()
@@ -66,23 +65,10 @@ struct ContentView: View {
         .navigationSplitViewStyle(.balanced)
         .overlay {
             if isOpeningPackage || workspace.startupLoadingPhase != nil {
-                ZStack {
-                    Color.black.opacity(0.18)
-                        .ignoresSafeArea()
-                    VStack(spacing: 14) {
-                        ProgressView()
-                            .controlSize(.large)
-                        Text(workspace.startupLoadingPhase?.message
-                             ?? String(localized: "Noteを読み込んでいます…"))
-                            .font(.headline)
-                    }
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 24)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-                    .shadow(radius: 12)
-                }
-                .transition(.opacity)
-                .zIndex(10)
+                iPadStartupLoadingView(
+                    message: workspace.startupLoadingPhase?.message
+                        ?? String(localized: "Noteを読み込んでいます…")
+                )
             }
         }
     }
@@ -241,7 +227,7 @@ struct ContentView: View {
             + String(format: String(localized: "usage.transpose"), Int64(account.usageByService.transpose))
     }
 
-    /// 認証状態を更新する。
+    /// 共有セッションをログアウトし、Workspaceのコンパイラを保存済み設定へ戻す。
     private func logout() {
         authenticationSession.logout()
         workspace.configureCompiler(
@@ -748,66 +734,6 @@ struct ContentView: View {
     }
 }
 
-private struct iPadScoreTreeRow: View {
-    let score: Score
-    let selectedScoreID: UUID?
-    @Binding var expandedScoreIDs: Set<UUID>
-    let select: (UUID) -> Void
-    let moveChildren: (UUID, IndexSet, Int) -> Void
-
-    var body: some View {
-        if score.children.isEmpty {
-            scoreButton
-        } else {
-            DisclosureGroup(isExpanded: Binding(
-                get: { expandedScoreIDs.contains(score.id) },
-                set: { isExpanded in
-                    if isExpanded {
-                        expandedScoreIDs.insert(score.id)
-                    } else {
-                        expandedScoreIDs.remove(score.id)
-                    }
-                }
-            )) {
-                ForEach(score.children) { child in
-                    iPadScoreTreeRow(
-                        score: child,
-                        selectedScoreID: selectedScoreID,
-                        expandedScoreIDs: $expandedScoreIDs,
-                        select: select,
-                        moveChildren: moveChildren
-                    )
-                }
-                .onMove { source, destination in
-                    moveChildren(score.id, source, destination)
-                }
-            } label: {
-                scoreButton
-            }
-        }
-    }
-
-    private var scoreButton: some View {
-        Button { select(score.id) } label: {
-            HStack(spacing: 8) {
-                Image(systemName: score.children.isEmpty ? "music.note" : "folder.fill")
-                    .foregroundStyle(selectedScoreID == score.id ? Color.accentColor : .secondary)
-                    .frame(width: 18)
-                Text(score.title)
-                    .font(.callout)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-            }
-            .padding(.vertical, 3)
-            .foregroundStyle(selectedScoreID == score.id ? Color.accentColor : .primary)
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(
-            selectedScoreID == score.id ? Color.accentColor.opacity(0.10) : Color.clear
-        )
-    }
-}
-
 private struct iPadPDFPageCarousel: View {
     private let pages: [RenderedPDFPage]
     @Binding var currentPage: Int
@@ -816,7 +742,7 @@ private struct iPadPDFPageCarousel: View {
     let onLeadingEdgeSwipe: () -> Void
     let onTap: () -> Void
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// PDFをページ単位の表示データへ分解し、スワイプとタップの通知先を保持する。
     init(
         data: Data,
         currentPage: Binding<Int>,
@@ -963,13 +889,17 @@ private struct iPadScoreEditorView: View {
     @State private var isShowingTransposeDialog = false
     @State private var derivationKind: ScoreDerivationKind = .new
     @State private var sourcePitch = "c"
-    @State private var destinationPitch = "a"
+    @State private var destinationPitch = "g"
+    @State private var destinationOctave: LilyPondTransposeOctave = .unchanged
     @State private var isTransposing = false
     @State private var isShowingDerivedScoreImport = false
     @State private var editorFontSize: Double
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// 選択中楽譜を編集用状態へ複製し、移調元と属調の初期値も設定する。
     init(workspace: LilyPondNoteWorkspace) {
+        let transposeDefaults = LilyPondTransposePitchSelection.defaultPitches(
+            for: workspace.scoreSource
+        )
         self.workspace = workspace
         _scoreSource = State(initialValue: workspace.scoreSource)
         _processingProgram = State(initialValue: workspace.processingProgram)
@@ -977,6 +907,8 @@ private struct iPadScoreEditorView: View {
         _editorFontSize = State(
             initialValue: LilyPondEditorConfigurationStore.fontSize(defaultValue: 18)
         )
+        _sourcePitch = State(initialValue: transposeDefaults.source)
+        _destinationPitch = State(initialValue: transposeDefaults.destination)
     }
 
     var body: some View {
@@ -1042,6 +974,7 @@ private struct iPadScoreEditorView: View {
                     .onMove(perform: moveScoresWithinGroup)
                 }
                 .navigationTitle("グループ内楽譜の選択")
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("閉じる") { isSelectingScore = false }
@@ -1065,6 +998,7 @@ private struct iPadScoreEditorView: View {
             Button("派生楽譜", systemImage: "plus.square.on.square") {
                 childTitle = ""
                 derivationKind = .new
+                resetTransposeSelection()
                 isShowingTransposeDialog = true
             }
             .buttonStyle(.bordered)
@@ -1147,8 +1081,24 @@ private struct iPadScoreEditorView: View {
                 }
                 if derivationKind == .transpose {
                     Section("移調設定") {
-                        TextField("移調元（例: c）", text: $sourcePitch)
-                        TextField("移調先（例: a）", text: $destinationPitch)
+                        Picker("移調元", selection: $sourcePitch) {
+                            ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
+                                Text($0).tag($0)
+                            }
+                        }
+                        HStack {
+                            Picker("移調先", selection: $destinationPitch) {
+                                ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
+                                    Text($0).tag($0)
+                                }
+                            }
+                            Picker("オクターブ", selection: $destinationOctave) {
+                                ForEach(LilyPondTransposeOctave.allCases) { octave in
+                                    Text(octave.displayName).tag(octave)
+                                }
+                            }
+                            .labelsHidden()
+                        }
                         Text(String(
                             format: String(localized: "transpose.create.message"),
                             RemoteLilyPondConfigurationStore.savedTransposeMode.displayName
@@ -1159,6 +1109,10 @@ private struct iPadScoreEditorView: View {
                 }
             }
             .navigationTitle("派生楽譜の生成")
+            .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: derivationKind) { _, kind in
+                if kind == .transpose { resetTransposeSelection() }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("キャンセル") { isShowingTransposeDialog = false }
@@ -1289,7 +1243,7 @@ private struct iPadScoreEditorView: View {
         let title = childTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         let source = sourcePitch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let destination = destinationPitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let destination = destinationOctave.applying(to: destinationPitch)
         guard derivationKind != .transpose || (!source.isEmpty && !destination.isEmpty) else {
             saveError = String(localized: "子楽譜名、移調元、移調先を入力してください。")
             selectedTab = .error
@@ -1318,6 +1272,14 @@ private struct iPadScoreEditorView: View {
         }
     }
 
+    /// 編集中の楽譜から移調元と属調を読み取り、移調画面の初期値へ反映する。
+    private func resetTransposeSelection() {
+        let defaults = LilyPondTransposePitchSelection.defaultPitches(for: scoreSource)
+        sourcePitch = defaults.source
+        destinationPitch = defaults.destination
+        destinationOctave = .unchanged
+    }
+
     /// 削除対象の楽譜を保持し、確認画面を開く。
     private func requestDeletion(of score: Score) {
         pendingDeletionScoreID = score.id
@@ -1325,7 +1287,7 @@ private struct iPadScoreEditorView: View {
         isConfirmingDeletion = true
     }
 
-    /// 対象データまたは保持状態を削除する。
+    /// 確認済みの楽譜を削除し、選択可能な楽譜がなければ編集画面を閉じる。
     private func deletePendingScore() {
         guard let scoreID = pendingDeletionScoreID else { return }
         pendingDeletionScoreID = nil

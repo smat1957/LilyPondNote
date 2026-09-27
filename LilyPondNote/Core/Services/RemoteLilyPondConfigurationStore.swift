@@ -95,7 +95,7 @@ enum RemoteLilyPondConfigurationStore {
         return (url, token)
     }
 
-    /// 認証状態を更新する。
+    /// Keychainからアクセストークンを削除し、保存済みログイン状態を無効にする。
     static func logout() {
         SecItemDelete(query as CFDictionary)
     }

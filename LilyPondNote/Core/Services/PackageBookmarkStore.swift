@@ -6,13 +6,15 @@ enum PackageBookmarkStore {
     private static let bookmarkKey = "lastPackageBookmark"
     private static let relativePackageNameKey = "lastPackageRelativeName"
 
-    /// 次回復元できるようPackageのアクセス先をブックマークへ保存する。
-    static func save(_ packageURL: URL) throws {
-        try saveBookmark(for: packageURL, relativePackageName: nil)
-    }
-
-    /// 次回復元できるようPackageのアクセス先をブックマークへ保存する。
-    static func save(packageURL: URL, accessRootURL: URL) throws {
+    /// Packageまたは親フォルダをブックマーク化し、次回起動時に同じPackageを解決できるよう保存する。
+    static func save(packageURL: URL, accessRootURL: URL? = nil) throws {
+        guard let accessRootURL else {
+            try saveBookmark(
+                for: packageURL.standardizedFileURL,
+                relativePackageName: nil
+            )
+            return
+        }
         let package = packageURL.standardizedFileURL
         let accessRoot = accessRootURL.standardizedFileURL
         guard package.deletingLastPathComponent().path == accessRoot.path else {
@@ -21,7 +23,7 @@ enum PackageBookmarkStore {
         try saveBookmark(for: accessRoot, relativePackageName: package.lastPathComponent)
     }
 
-    /// アクセス先のブックマークと相対Package名を保存する。
+    /// 指定URLのブックマークデータと、必要なら親からの相対Package名をUserDefaultsへ保存する。
     private static func saveBookmark(
         for accessURL: URL,
         relativePackageName: String?
@@ -71,7 +73,7 @@ enum PackageBookmarkStore {
         )
     }
 
-    /// 対象データまたは保持状態を削除する。
+    /// 前回Packageのブックマークと相対名を削除し、次回起動時の自動復元を無効にする。
     static func clear() {
         UserDefaults.standard.removeObject(forKey: bookmarkKey)
         UserDefaults.standard.removeObject(forKey: relativePackageNameKey)

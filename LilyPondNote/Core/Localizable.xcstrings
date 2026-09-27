@@ -1,6 +1,48 @@
 {
   "sourceLanguage" : "ja",
   "strings" : {
+    "オクターブ上げる" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Octave Up" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "オクターブ上げる" } }
+      }
+    },
+    "オクターブ下げる" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Octave Down" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "オクターブ下げる" } }
+      }
+    },
+    "オクターブ" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Octave" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "オクターブ" } }
+      }
+    },
+    "変更なし" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "No Change" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "変更なし" } }
+      }
+    },
+    "移調元" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Source Key" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "移調元" } }
+      }
+    },
+    "移調先" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Destination Key" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "移調先" } }
+      }
+    },
     "Noteの操作" : {
       "extractionState" : "manual",
       "localizations" : {

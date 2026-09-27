@@ -8,7 +8,7 @@ struct Score: Codable, Equatable, Identifiable, Sendable {
     var compilerVersion: String?
     var children: [Score]
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// 識別子、表示名、コンパイラ情報、子階層を受け取り一つの楽譜モデルを作る。
     init(
         id: UUID = UUID(),
         title: String,
@@ -96,7 +96,7 @@ extension LilyPondNoteDocument {
     }
 
     @discardableResult
-    /// 対象データまたは保持状態を削除する。
+    /// 指定楽譜を文書階層から除き、その子を同じ位置へ昇格させて削除結果を返す。
     mutating func removeScorePromotingChildren(withID scoreID: UUID) -> Score? {
         Self.removePromotingChildren(scoreID, from: &scores)
     }
@@ -184,7 +184,7 @@ extension LilyPondNoteDocument {
         return false
     }
 
-    /// 対象データまたは保持状態を削除する。
+    /// 階層を再帰的に探索し、対象を削除して子を元の位置へ昇格させる。
     private static func removePromotingChildren(
         _ scoreID: UUID,
         from scores: inout [Score]

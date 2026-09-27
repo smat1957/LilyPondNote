@@ -7,7 +7,7 @@ actor RemoteLilyPondCompiler: LilyPondCompiling {
     private let accessToken: String
     private let session: URLSession
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// 認証先URL、アクセストークン、通信セッションを保持して版組要求を送れる状態を作る。
     init(serverURL: URL, accessToken: String, session: URLSession = .shared) {
         self.serverURL = serverURL
         self.accessToken = accessToken
@@ -77,7 +77,7 @@ enum RemoteLilyPondAuthentication {
         let account: RemoteLilyPondAccount
     }
 
-    /// 認証状態を更新する。
+    /// 入力された接続先と資格情報でログインし、保存可能なセッション情報を返す。
     static func login(
         serverURL: String,
         email: String,
@@ -146,7 +146,7 @@ enum RemoteLilyPondAuthentication {
         return account
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// サーバーURLを正規化し、HTTPまたはHTTPSの接続先として有効か検証する。
     static func validatedServerURL(_ value: String) throws -> URL {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: normalized),
@@ -196,7 +196,7 @@ struct RemoteLilyPondAccount: Decodable, Equatable, Sendable {
         case service, id, email, plan, status, used, usageByService, limit
     }
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// サーバー応答を復号し、旧形式で欠ける契約プランにはFreeを補ってアカウントを作る。
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         service = try values.decode(String.self, forKey: .service)

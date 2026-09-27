@@ -10,7 +10,7 @@ struct LilyPondNoteDocument: Codable, Equatable, Identifiable, Sendable {
     var title: String
     var scores: [Score]
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// Noteの識別子、表示名、楽譜階層、保存形式の版を受け取り文書モデルを作る。
     init(
         id: UUID = UUID(),
         title: String,

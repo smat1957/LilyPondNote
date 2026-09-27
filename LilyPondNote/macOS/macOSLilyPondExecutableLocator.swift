@@ -5,7 +5,7 @@ import Foundation
 struct macOSLilyPondExecutableLocator: Sendable {
     static let defaultsKey = "lilyPondExecutablePath"
 
-    /// 入力または対象の有効性を確認する。
+    /// 既知のインストール先とPATHを順に調べ、実行可能なLilyPondコマンドのURLを返す。
     func locate() -> URL? {
         candidates.first {
             FileManager.default.isExecutableFile(atPath: $0.path)

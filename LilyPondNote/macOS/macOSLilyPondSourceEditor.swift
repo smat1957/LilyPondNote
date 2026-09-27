@@ -8,10 +8,10 @@ struct macOSLilyPondSourceEditor: NSViewRepresentable {
     @Binding var text: String
     let fontSize: Double
 
-    /// 画面部品の構築または状態反映を行う。
+    /// AppKitのテキストビューとSwiftUIのBindingを接続するCoordinatorを生成する。
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// 等幅フォントとスクロールを設定したmacOS用ソース編集ビューを生成する。
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
         guard let textView = scrollView.documentView as? NSTextView else {
@@ -38,7 +38,7 @@ struct macOSLilyPondSourceEditor: NSViewRepresentable {
         return scrollView
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// SwiftUIから渡された本文と設定変更を既存のテキストビューへ反映する。
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? NSTextView else { return }
@@ -52,7 +52,7 @@ struct macOSLilyPondSourceEditor: NSViewRepresentable {
         weak var textView: NSTextView?
         private var isHighlighting = false
 
-        /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+        /// 親Editorを保持し、AppKitからの編集通知をSwiftUIへ戻せる状態を作る。
         init(parent: macOSLilyPondSourceEditor) { self.parent = parent }
 
         /// テキスト変更を親Viewへ反映して構文着色を更新する。
@@ -73,7 +73,7 @@ struct macOSLilyPondSourceEditor: NSViewRepresentable {
             isHighlighting = false
         }
 
-        /// 認証状態を更新する。
+        /// 現在の文字列へ構文着色を再適用し、フォント設定の変更も反映する。
         func refreshHighlighting() {
             guard let textView else { return }
             applyHighlighting(to: textView)

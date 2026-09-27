@@ -22,7 +22,7 @@ struct RenderedPDFPage: Identifiable {
 enum PDFPageRenderer {
     private static let pixelHeight = 1800
 
-    /// PDFの各ページを識別可能な表示用データへ分解する。
+    /// PDFを開いてページ番号と文書識別値を持つ遅延描画用データへ分解する。
     static func render(data: Data) -> [RenderedPDFPage] {
         guard let document = PDFDocument(data: data) else { return [] }
         let documentFingerprint = data.hashValue
@@ -43,7 +43,7 @@ enum PDFPageRenderer {
         return render(pdfPage: pdfPage)
     }
 
-    /// PDFの各ページを識別可能な表示用データへ分解する。
+    /// PDFページを白背景のビットマップへ縦横比を保って描画する。
     private static func render(pdfPage: CGPDFPage) -> CGImage? {
         let bounds = pdfPage.getBoxRect(.cropBox)
         guard bounds.width > 0, bounds.height > 0 else { return nil }

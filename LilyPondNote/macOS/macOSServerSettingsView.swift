@@ -75,7 +75,7 @@ struct macOSServerSettingsView: View {
         )
     }
 
-    /// 認証状態を更新する。
+    /// 入力した接続先と資格情報でログインし、成功時は共有セッションへ反映する。
     private func login() {
         saveSettings()
         isLoggingIn = true

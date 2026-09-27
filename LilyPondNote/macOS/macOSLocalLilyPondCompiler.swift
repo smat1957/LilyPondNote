@@ -5,7 +5,7 @@ import Foundation
 actor macOSLocalLilyPondCompiler: LilyPondCompiling {
     private let executableLocator: macOSLilyPondExecutableLocator
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// LilyPond実行ファイルの探索方法を保持し、ローカル版組を実行できる状態を作る。
     init(executableLocator: macOSLilyPondExecutableLocator = .init()) {
         self.executableLocator = executableLocator
     }

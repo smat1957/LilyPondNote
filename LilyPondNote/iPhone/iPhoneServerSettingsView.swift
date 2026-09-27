@@ -85,7 +85,7 @@ struct iPhoneServerSettingsView: View {
         )
     }
 
-    /// 認証状態を更新する。
+    /// 入力した接続先と資格情報でログインし、成功時はWorkspaceのコンパイラへ反映する。
     private func login() {
         isLoggingIn = true
         Task {

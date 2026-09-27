@@ -118,7 +118,7 @@ enum LilyPondSyntaxHighlighting {
         let captureGroup: Int
         let face: LilyPondSyntaxFace
 
-        /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+        /// 正規表現、着色対象グループ、構文種別を組み合わせて一つの解析規則を作る。
         init(
             _ pattern: String,
             captureGroup: Int = 0,

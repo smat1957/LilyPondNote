@@ -10,7 +10,7 @@ struct LilyPondNotePackageStore {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// 使用するFileManagerを保持し、安定した形式でメタデータを保存するJSON変換器を準備する。
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
 
@@ -73,7 +73,7 @@ struct LilyPondNotePackageStore {
         )
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// 文書モデルとPackage内の全楽譜ファイル群が一致していることを検証する。
     func validatePackage(
         for document: LilyPondNoteDocument,
         at packageURL: URL
@@ -171,7 +171,7 @@ struct LilyPondNotePackageStore {
         return fileSet
     }
 
-    /// 対象データまたは保持状態を削除する。
+    /// 指定楽譜のファイル群を削除し、その子ファイル群を削除対象の親階層へ移動する。
     func removeFileSetPromotingChildren(
         for scoreID: UUID,
         in document: LilyPondNoteDocument,
@@ -337,7 +337,7 @@ struct LilyPondNotePackageStore {
         )
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// 処理手続きが同じ楽譜フォルダのscore.lyを直接includeしているか判定する。
     static func includesLocalScoreData(_ processingProgram: String) -> Bool {
         processingProgram.split(separator: "\n").contains { line in
             line.trimmingCharacters(in: .whitespaces)
@@ -386,7 +386,7 @@ struct LilyPondNotePackageStore {
         }
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// 文書階層を再帰的にたどり、指定IDに対応する楽譜ファイル群のパスを返す。
     private func locateFileSet(
         for scoreID: UUID,
         among scores: [Score],
@@ -416,7 +416,7 @@ struct LilyPondNotePackageStore {
         return nil
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// 対応するスキーマであり、全楽譜IDが重複していない文書か検証する。
     private func validateDocument(_ document: LilyPondNoteDocument) throws {
         guard document.schemaVersion == LilyPondNoteDocument.currentSchemaVersion
         else {
@@ -427,7 +427,7 @@ struct LilyPondNotePackageStore {
         try validateUniqueIDs(in: document.scores, collectedIDs: &scoreIDs)
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// 楽譜階層を再帰的に走査し、重複IDがあればPackageエラーを送出する。
     private func validateUniqueIDs(
         in scores: [Score],
         collectedIDs: inout Set<UUID>
@@ -443,7 +443,7 @@ struct LilyPondNotePackageStore {
         }
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// 文書階層に必要な全ディレクトリと必須ファイルがPackage内に存在するか検証する。
     private func validateFileSets(
         for scores: [Score],
         in scoresDirectoryURL: URL
@@ -478,7 +478,7 @@ struct LilyPondNotePackageStore {
         }
     }
 
-    /// 入力または対象の有効性を確認する。
+    /// 指定パスが要求された種類のファイルまたはディレクトリとして存在するか確認する。
     private func requireItem(at url: URL, isDirectory: Bool) throws {
         var actualIsDirectory: ObjCBool = false
         guard fileManager.fileExists(

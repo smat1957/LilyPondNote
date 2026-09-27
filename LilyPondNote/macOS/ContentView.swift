@@ -81,11 +81,17 @@ struct ContentView: View {
             .background(.background)
         }
         .navigationSplitViewStyle(.balanced)
+        .task { await workspace.restoreAtLaunch() }
         .background {
             macOSArrowKeyMonitor(
                 isEnabled: isSidebarKeyboardNavigationEnabled,
                 onMove: moveSidebarSelection
             )
+        }
+        .overlay {
+            if let phase = workspace.startupLoadingPhase {
+                macOSStartupLoadingView(phase: phase)
+            }
         }
         .sheet(isPresented: $isEditing) {
             macOSScoreEditorView(workspace: workspace)
@@ -520,24 +526,24 @@ private struct macOSArrowKeyMonitor: NSViewRepresentable {
     let isEnabled: Bool
     let onMove: (MoveCommandDirection) -> Void
 
-    /// 画面部品の構築または状態反映を行う。
+    /// キー入力監視の有効状態と移動通知を保持するCoordinatorを生成する。
     func makeCoordinator() -> Coordinator {
         Coordinator(isEnabled: isEnabled, onMove: onMove)
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// 表示を持たないAppKitビューを生成し、ローカルキーイベント監視を開始する。
     func makeNSView(context: Context) -> NSView {
         context.coordinator.startMonitoring()
         return NSView(frame: .zero)
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// SwiftUI側で更新された監視可否と移動処理をCoordinatorへ反映する。
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.isEnabled = isEnabled
         context.coordinator.onMove = onMove
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// 監視用ビューの破棄時にキーイベントモニターを解除する。
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
         coordinator.stopMonitoring()
     }
@@ -547,7 +553,7 @@ private struct macOSArrowKeyMonitor: NSViewRepresentable {
         var onMove: (MoveCommandDirection) -> Void
         private var monitor: Any?
 
-        /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+        /// キー監視の可否と、上下移動を通知するクロージャを保持する。
         init(isEnabled: Bool, onMove: @escaping (MoveCommandDirection) -> Void) {
             self.isEnabled = isEnabled
             self.onMove = onMove
@@ -583,68 +589,12 @@ private struct macOSArrowKeyMonitor: NSViewRepresentable {
     }
 }
 
-private struct macOSScoreTreeRow: View {
-    let score: Score
-    let selectedScoreID: UUID?
-    @Binding var expandedScoreIDs: Set<UUID>
-    let select: (UUID) -> Void
-    let moveChildren: (UUID, IndexSet, Int) -> Void
-    var body: some View {
-        if score.children.isEmpty {
-            scoreButton
-        } else {
-            DisclosureGroup(isExpanded: Binding(
-                get: { expandedScoreIDs.contains(score.id) },
-                set: { expanded in
-                    if expanded { expandedScoreIDs.insert(score.id) }
-                    else { expandedScoreIDs.remove(score.id) }
-                }
-            )) {
-                ForEach(score.children) {
-                    macOSScoreTreeRow(
-                        score: $0,
-                        selectedScoreID: selectedScoreID,
-                        expandedScoreIDs: $expandedScoreIDs,
-                        select: select,
-                        moveChildren: moveChildren
-                    )
-                }
-                .onMove { source, destination in
-                    moveChildren(score.id, source, destination)
-                }
-            } label: {
-                scoreButton
-            }
-        }
-    }
-
-    private var scoreButton: some View {
-        Button { select(score.id) } label: {
-            HStack(spacing: 7) {
-                Image(systemName: score.children.isEmpty ? "music.note" : "folder.fill")
-                    .foregroundStyle(selectedScoreID == score.id ? Color.accentColor : .secondary)
-                    .frame(width: 16)
-                Text(score.title)
-                    .font(.callout)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-            }
-            .padding(.vertical, 2)
-            .foregroundStyle(selectedScoreID == score.id ? Color.accentColor : .primary)
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(
-            selectedScoreID == score.id ? Color.accentColor.opacity(0.10) : Color.clear
-        )
-    }
-}
-
 private struct macOSPDFView: NSViewRepresentable {
     let data: Data
     @Binding var currentPage: Int
     let onVerticalSwipe: (Int) -> Void
 
-    /// 画面部品の構築または状態反映を行う。
+    /// PDFページと縦スワイプをSwiftUIへ通知するCoordinatorを生成する。
     func makeCoordinator() -> Coordinator {
         Coordinator(
             currentPage: $currentPage,
@@ -653,7 +603,7 @@ private struct macOSPDFView: NSViewRepresentable {
         )
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// PDFKitビューを生成し、文書表示、ページ監視、スクロール監視を開始する。
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView()
         view.displayMode = .singlePageContinuous
@@ -667,7 +617,7 @@ private struct macOSPDFView: NSViewRepresentable {
         return view
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// PDFデータが変わった場合だけ文書を差し替え、表示ページを先頭へ戻す。
     func updateNSView(_ view: PDFView, context: Context) {
         context.coordinator.onVerticalSwipe = onVerticalSwipe
         if context.coordinator.shouldDisplay(data) {
@@ -677,7 +627,7 @@ private struct macOSPDFView: NSViewRepresentable {
         }
     }
 
-    /// 画面部品の構築または状態反映を行う。
+    /// PDFKitビューの破棄時にイベント監視とページ変更通知を解除する。
     static func dismantleNSView(_ nsView: PDFView, coordinator: Coordinator) {
         coordinator.stopMonitoring()
         NotificationCenter.default.removeObserver(coordinator)
@@ -693,7 +643,7 @@ private struct macOSPDFView: NSViewRepresentable {
         private var accumulatedVerticalDelta: CGFloat = 0
         private var didTriggerVerticalSwipe = false
 
-        /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+        /// 現在ページ、表示中PDF、スワイプ通知を保持してPDFKitとの同期を準備する。
         init(
             currentPage: Binding<Int>,
             displayedData: Data,
@@ -796,7 +746,8 @@ private struct macOSScoreEditorView: View {
     @FocusState private var isScoreTitleFocused: Bool
     @State private var isShowingTransposeDialog = false
     @State private var sourcePitch = "c"
-    @State private var destinationPitch = "a"
+    @State private var destinationPitch = "g"
+    @State private var destinationOctave: LilyPondTransposeOctave = .unchanged
     @State private var isTransposing = false
     @State private var isShowingDerivedScoreImport = false
     @State private var derivationKind: ScoreDerivationKind = .new
@@ -806,13 +757,18 @@ private struct macOSScoreEditorView: View {
     @State private var hierarchySelectionID: UUID?
     @FocusState private var isHierarchyListFocused: Bool
 
-    /// 必要な依存情報と初期値を受け取り、この型の状態を初期化する。
+    /// 選択中楽譜を編集用状態へ複製し、移調元と属調の初期値も設定する。
     init(workspace: LilyPondNoteWorkspace) {
+        let transposeDefaults = LilyPondTransposePitchSelection.defaultPitches(
+            for: workspace.scoreSource
+        )
         self.workspace = workspace
         _scoreSource = State(initialValue: workspace.scoreSource)
         _processingProgram = State(initialValue: workspace.processingProgram)
         _scoreTitleDraft = State(initialValue: workspace.selectedScore?.title ?? "")
         _editorFontSize = State(initialValue: LilyPondEditorConfigurationStore.fontSize(defaultValue: 16))
+        _sourcePitch = State(initialValue: transposeDefaults.source)
+        _destinationPitch = State(initialValue: transposeDefaults.destination)
     }
 
     var body: some View {
@@ -821,6 +777,7 @@ private struct macOSScoreEditorView: View {
                 Button("派生楽譜", systemImage: "plus.square.on.square") {
                     childTitle = ""
                     derivationKind = .new
+                    resetTransposeSelection()
                     isShowingTransposeDialog = true
                 }
                 .disabled(isTransposing)
@@ -968,17 +925,47 @@ private struct macOSScoreEditorView: View {
 
     private var derivationSheet: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("派生楽譜の生成").font(.title2.bold())
+            Text("派生楽譜の生成").font(.headline)
             Picker("生成方法", selection: $derivationKind) {
                 ForEach(ScoreDerivationKind.allCases) { Text(LocalizedStringKey($0.rawValue)).tag($0) }
             }
             .pickerStyle(.radioGroup)
+            .onChange(of: derivationKind) { _, kind in
+                if kind == .transpose { resetTransposeSelection() }
+            }
             if derivationKind != .importFiles {
                 TextField("子楽譜名", text: $childTitle)
             }
             if derivationKind == .transpose {
-                TextField("移調元（例: c）", text: $sourcePitch)
-                TextField("移調先（例: a）", text: $destinationPitch)
+                HStack {
+                    Text("移調元")
+                    Spacer()
+                    Picker("移調元", selection: $sourcePitch) {
+                        ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
+                            Text($0).tag($0)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 110)
+                }
+                HStack {
+                    Text("移調先")
+                    Spacer()
+                    Picker("移調先", selection: $destinationPitch) {
+                        ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
+                            Text($0).tag($0)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 110)
+                    Picker("オクターブ", selection: $destinationOctave) {
+                        ForEach(LilyPondTransposeOctave.allCases) { octave in
+                            Text(octave.displayName).tag(octave)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 160)
+                }
                 Text(String(format: String(localized: "transpose.create.message"), RemoteLilyPondConfigurationStore.savedTransposeMode.displayName))
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -1122,7 +1109,7 @@ private struct macOSScoreEditorView: View {
         let title = childTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         let source = sourcePitch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let destination = destinationPitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let destination = destinationOctave.applying(to: destinationPitch)
         guard derivationKind != .transpose || (!source.isEmpty && !destination.isEmpty) else {
             saveError = String(localized: "子楽譜名、移調元、移調先を入力してください。")
             selectedTab = .error
@@ -1150,6 +1137,14 @@ private struct macOSScoreEditorView: View {
         }
     }
 
+    /// 編集中の楽譜から移調元と属調を読み取り、移調画面の初期値へ反映する。
+    private func resetTransposeSelection() {
+        let defaults = LilyPondTransposePitchSelection.defaultPitches(for: scoreSource)
+        sourcePitch = defaults.source
+        destinationPitch = defaults.destination
+        destinationOctave = .unchanged
+    }
+
     /// 削除対象の楽譜を保持し、確認画面を開く。
     private func requestDeletion(of score: Score) {
         pendingDeletionScoreID = score.id
@@ -1157,7 +1152,7 @@ private struct macOSScoreEditorView: View {
         isConfirmingDeletion = true
     }
 
-    /// 対象データまたは保持状態を削除する。
+    /// 確認済みの楽譜を削除し、選択可能な楽譜がなければ編集画面を閉じる。
     private func deletePendingScore() {
         guard let scoreID = pendingDeletionScoreID else { return }
         pendingDeletionScoreID = nil

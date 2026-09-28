@@ -748,6 +748,7 @@ private struct macOSScoreEditorView: View {
     @State private var sourcePitch = "c"
     @State private var destinationPitch = "g"
     @State private var destinationOctave: LilyPondTransposeOctave = .unchanged
+    @State private var transposeMode = RemoteLilyPondConfigurationStore.savedTransposeMode
     @State private var isTransposing = false
     @State private var isShowingDerivedScoreImport = false
     @State private var derivationKind: ScoreDerivationKind = .new
@@ -937,34 +938,36 @@ private struct macOSScoreEditorView: View {
                 TextField("子楽譜名", text: $childTitle)
             }
             if derivationKind == .transpose {
-                HStack {
-                    Text("移調元")
-                    Spacer()
-                    Picker("移調元", selection: $sourcePitch) {
-                        ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
-                            Text($0).tag($0)
+                Toggle("リモートで移調", isOn: usesRemoteTranspose)
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                    GridRow {
+                        Text("移調元")
+                        Picker("移調元", selection: $sourcePitch) {
+                            ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
+                                Text($0).tag($0)
+                            }
                         }
+                        .labelsHidden()
+                        .frame(width: 110)
+                        Color.clear.frame(width: 160, height: 1)
                     }
-                    .labelsHidden()
-                    .frame(width: 110)
-                }
-                HStack {
-                    Text("移調先")
-                    Spacer()
-                    Picker("移調先", selection: $destinationPitch) {
-                        ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
-                            Text($0).tag($0)
+                    GridRow {
+                        Text("移調先")
+                        Picker("移調先", selection: $destinationPitch) {
+                            ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
+                                Text($0).tag($0)
+                            }
                         }
-                    }
-                    .labelsHidden()
-                    .frame(width: 110)
-                    Picker("オクターブ", selection: $destinationOctave) {
-                        ForEach(LilyPondTransposeOctave.allCases) { octave in
-                            Text(octave.displayName).tag(octave)
+                        .labelsHidden()
+                        .frame(width: 110)
+                        Picker("オクターブ", selection: $destinationOctave) {
+                            ForEach(LilyPondTransposeOctave.allCases) { octave in
+                                Text(octave.displayName).tag(octave)
+                            }
                         }
+                        .labelsHidden()
+                        .frame(width: 160)
                     }
-                    .labelsHidden()
-                    .frame(width: 160)
                 }
                 Text(String(format: String(localized: "transpose.create.message"), RemoteLilyPondConfigurationStore.savedTransposeMode.displayName))
                     .font(.footnote).foregroundStyle(.secondary)
@@ -1002,6 +1005,17 @@ private struct macOSScoreEditorView: View {
                 }
             )
         }
+    }
+
+    /// 派生楽譜画面のスイッチを保存済み移調方式へ結び付け、変更を直ちに永続化する。
+    private var usesRemoteTranspose: Binding<Bool> {
+        Binding(
+            get: { transposeMode == .remote },
+            set: {
+                transposeMode = $0 ? .remote : .local
+                RemoteLilyPondConfigurationStore.savedTransposeMode = transposeMode
+            }
+        )
     }
 
     @ViewBuilder

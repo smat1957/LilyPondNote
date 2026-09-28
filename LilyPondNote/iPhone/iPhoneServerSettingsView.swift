@@ -1,4 +1,4 @@
-// iPhone版の接続、ログイン、移調方法、エディタ設定画面を構成する。
+// iPhone版の接続、ログイン、エディタ設定画面を構成する。
 
 import SwiftUI
 
@@ -10,19 +10,12 @@ struct iPhoneServerSettingsView: View {
     @State private var password = ""
     @State private var message = ""
     @State private var isLoggingIn = false
-    @State private var transposeMode = RemoteLilyPondConfigurationStore.savedTransposeMode
     @State private var syntaxStyle = LilyPondEditorConfigurationStore.syntaxStyle
     @State private var editorFontSize = LilyPondEditorConfigurationStore.fontSize(defaultValue: 17)
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("移調処理") {
-                    Toggle("リモートで移調", isOn: usesRemoteTranspose)
-                    .onChange(of: transposeMode) { _, mode in
-                        RemoteLilyPondConfigurationStore.savedTransposeMode = mode
-                    }
-                }
                 Section("エディタ") {
                     Picker("キーワード配色", selection: $syntaxStyle) {
                         ForEach(LilyPondSyntaxStyle.allCases) { style in
@@ -67,7 +60,6 @@ struct iPhoneServerSettingsView: View {
                 }
             }
             .onDisappear {
-                RemoteLilyPondConfigurationStore.savedTransposeMode = transposeMode
                 LilyPondEditorConfigurationStore.syntaxStyle = syntaxStyle
                 LilyPondEditorConfigurationStore.saveFontSize(editorFontSize)
                 RemoteLilyPondConfigurationStore.remember(
@@ -76,13 +68,6 @@ struct iPhoneServerSettingsView: View {
                 )
             }
         }
-    }
-
-    private var usesRemoteTranspose: Binding<Bool> {
-        Binding(
-            get: { transposeMode == .remote },
-            set: { transposeMode = $0 ? .remote : .local }
-        )
     }
 
     /// 入力した接続先と資格情報でログインし、成功時はWorkspaceのコンパイラへ反映する。

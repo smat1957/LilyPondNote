@@ -235,6 +235,16 @@ Python移調エンジンを更新するときは8ファイルを一式で再配�
 再起動する。LilyPondNoteアプリのSwift版を再ビルドするだけでは、リモート移調用の
 P2エンジンは更新されない。
 
+EsからGesへの移調では、入力中の\texttt{beses}が音程計算上Dトリプルフラット相当になる。
+この場合も未対応の臨時記号エラーにせず、同じ音高の代表表記\texttt{b}へ簡略化されることを
+確認する。
+
+\begin{command}
+sudo -u lilypond-transpose-p2 sh -c \
+  'printf "%s\n" "\\relative es'\'' { beses4 }" | \
+   python3 /opt/lilypond-transpose/P2/engine/main.py es ges'
+\end{command}
+
 \subsection{移調CLI側の必要ファイル}
 
 次の8ファイルは、直前の手順で\path{/opt/lilypond-transpose/P2/engine}へ配置する
@@ -570,6 +580,8 @@ HTTP 200でも\texttt{unavailable}または\texttt{false}なら、envの
 さらにCからGesへ、\texttt{\textbackslash key c \textbackslash major}と
 \texttt{\textbackslash relative c' \{ as4 \}}を含むソースを送り、応答が
 \texttt{\textbackslash key ges \textbackslash major}と\texttt{d4}を含むことを確認する。
+EsからGesへの要求では、\texttt{beses}を含むソースがHTTP 500にならず、代表表記の
+\texttt{b}を含む\texttt{transposedSource}を返すことも確認する。
 
 内部トークンなしの処理要求が401になることを確認する。
 

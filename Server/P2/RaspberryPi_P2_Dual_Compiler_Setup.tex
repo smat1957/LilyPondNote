@@ -220,6 +220,21 @@ sudo -u lilypond-transpose-p2 sh -c \
    python3 /opt/lilypond-transpose/P2/engine/main.py c a'
 \end{command}
 
+フラット系の綴りとダブルフラットの簡略化を含む回帰確認として、CからGesへの移調も
+実行する。出力に\texttt{\textbackslash key ges \textbackslash major}と
+\texttt{d4}が含まれ、\texttt{fis}調にならず、\texttt{KeyError}も発生しないことを確認する。
+
+\begin{command}
+sudo -u lilypond-transpose-p2 sh -c \
+  'printf "%s\n" "\\key c \\major" "\\relative c'\'' { as4 }" | \
+   python3 /opt/lilypond-transpose/P2/engine/main.py c ges'
+\end{command}
+
+Python移調エンジンを更新するときは8ファイルを一式で再配置し、構文検査と上記CLI試験を
+通した後、\texttt{sudo systemctl restart lilypond-transpose-p2.service}でサービスを
+再起動する。LilyPondNoteアプリのSwift版を再ビルドするだけでは、リモート移調用の
+P2エンジンは更新されない。
+
 \subsection{移調CLI側の必要ファイル}
 
 次の8ファイルは、直前の手順で\path{/opt/lilypond-transpose/P2/engine}へ配置する
@@ -552,6 +567,9 @@ HTTP 200でも\texttt{unavailable}または\texttt{false}なら、envの
 \texttt{c}から\texttt{c,}も送信する。前者が7半音上、後者が12半音下の
 \texttt{transposedSource}を返すことを確認する。また、\texttt{d',}、スマート引用符を含む
 \texttt{d’}、バックスラッシュを含む\texttt{d\textbackslash'}がHTTP 422になることを確認する。
+さらにCからGesへ、\texttt{\textbackslash key c \textbackslash major}と
+\texttt{\textbackslash relative c' \{ as4 \}}を含むソースを送り、応答が
+\texttt{\textbackslash key ges \textbackslash major}と\texttt{d4}を含むことを確認する。
 
 内部トークンなしの処理要求が401になることを確認する。
 

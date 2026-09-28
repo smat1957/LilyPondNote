@@ -813,6 +813,7 @@ private struct iPhoneScoreEditorView: View {
                         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                             GridRow {
                                 Text("移調元")
+                                    .fixedSize(horizontal: true, vertical: false)
                                 Picker("移調元", selection: $sourcePitch) {
                                     ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
                                         Text($0).tag($0)
@@ -824,6 +825,7 @@ private struct iPhoneScoreEditorView: View {
                             }
                             GridRow {
                                 Text("移調先")
+                                    .fixedSize(horizontal: true, vertical: false)
                                 Picker("移調先", selection: $destinationPitch) {
                                     ForEach(LilyPondTransposePitchSelection.availableKeys, id: \.self) {
                                         Text($0).tag($0)

@@ -30,7 +30,7 @@ struct ContentView: View {
     @State private var operationMessage = ""
     @State private var isConfirmingNewNote = false
     @State private var noteTitleDraft = String(localized: "名称未設定")
-    @State private var pendingOverwriteDestination: URL?
+    @State private var pendingOverwriteDirectory: URL?
     @State private var isConfirmingOverwrite = false
     @State private var isConfirmingOpen = false
     @State private var isOpeningPackage = false
@@ -150,10 +150,10 @@ struct ContentView: View {
         .alert("同じ名前のNoteがあります", isPresented: $isConfirmingOverwrite) {
             Button("上書き保存", role: .destructive) { overwritePendingPackage() }
             Button("キャンセル", role: .cancel) {
-                pendingOverwriteDestination = nil
+                pendingOverwriteDirectory = nil
             }
         } message: {
-            Text(String(format: String(localized: "note.overwrite.message"), pendingOverwriteNoteName))
+            Text(String(format: String(localized: "note.overwrite.message"), packageName))
         }
         .alert("別のNoteを開きますか？", isPresented: $isConfirmingOpen) {
             Button("開く") { beginFileOperation(.openPackage) }
@@ -624,12 +624,13 @@ struct ContentView: View {
                     isDirectory: true
                 )
                 if FileManager.default.fileExists(atPath: destination.path) {
-                    pendingOverwriteDestination = destination
+                    pendingOverwriteDirectory = url
                     isConfirmingOverwrite = true
                 } else {
                     try workspace.savePackageAs(
                         to: destination,
-                        noteTitle: packageName
+                        noteTitle: packageName,
+                        accessRootURL: url
                     )
                     operationMessage = destination.path
                 }
@@ -704,22 +705,19 @@ struct ContentView: View {
             : String(localized: "現在の保存済みNoteを閉じ、楽譜がない新しいNoteにします。")
     }
 
-    private var pendingOverwriteNoteName: String {
-        pendingOverwriteDestination?.deletingPathExtension().lastPathComponent
-            ?? packageName
-    }
-
     /// 指定済みの保存先へ既存Packageを上書きする。
     private func overwritePendingPackage() {
-        guard let destination = pendingOverwriteDestination else { return }
-        pendingOverwriteDestination = nil
-        let parent = destination.deletingLastPathComponent()
-        let accessed = parent.startAccessingSecurityScopedResource()
-        defer { if accessed { parent.stopAccessingSecurityScopedResource() } }
+        guard let directory = pendingOverwriteDirectory else { return }
+        pendingOverwriteDirectory = nil
+        let destination = directory.appendingPathComponent(
+            NoteFileUtilities.safeFileName(packageName) + ".lilypondnote",
+            isDirectory: true
+        )
         do {
             try workspace.savePackageAs(
                 to: destination,
                 noteTitle: packageName,
+                accessRootURL: directory,
                 overwriteExisting: true
             )
             operationMessage = destination.path

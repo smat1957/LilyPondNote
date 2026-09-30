@@ -1421,6 +1421,12 @@
             "state" : "translated",
             "value" : "Select Score"
           }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "楽譜の選択"
+          }
         }
       }
     },

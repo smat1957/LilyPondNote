@@ -42,12 +42,35 @@ struct LilyPondNotePackageStore {
         try saveMetadata(for: document, at: packageURL)
     }
 
-    /// Package内のメタデータを読み取り、文書モデルへ復元する。
+    /// iCloud上のPackage全体を取得してからメタデータを読み取り、文書モデルへ復元する。
     func loadDocument(from packageURL: URL) throws -> LilyPondNoteDocument {
-        let data = try Data(contentsOf: metadataURL(in: packageURL))
-        let document = try decoder.decode(LilyPondNoteDocument.self, from: data)
-        try validateDocument(document)
-        return document
+        var coordinatedResult: Result<LilyPondNoteDocument, Error>?
+        var coordinationError: NSError?
+        NSFileCoordinator(filePresenter: nil).coordinate(
+            readingItemAt: packageURL,
+            options: [],
+            error: &coordinationError
+        ) { coordinatedPackageURL in
+            coordinatedResult = Result {
+                let data = try Data(
+                    contentsOf: metadataURL(in: coordinatedPackageURL)
+                )
+                let document = try decoder.decode(
+                    LilyPondNoteDocument.self,
+                    from: data
+                )
+                try validateDocument(document)
+                return document
+            }
+        }
+
+        if let coordinationError {
+            throw coordinationError
+        }
+        guard let coordinatedResult else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return try coordinatedResult.get()
     }
 
     /// 文書モデルを検証し、Packageのメタデータへ保存する。

@@ -454,8 +454,15 @@ final class LilyPondNoteWorkspace: ObservableObject {
     func savePackageAs(
         to destinationURL: URL,
         noteTitle: String,
+        accessRootURL: URL,
         overwriteExisting: Bool = false
     ) throws {
+        let accessed = accessRootURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessed {
+                accessRootURL.stopAccessingSecurityScopedResource()
+            }
+        }
         let normalized = try validatedNoteName(noteTitle)
         let oldTitle = document.title
         document.title = normalized
@@ -471,7 +478,7 @@ final class LilyPondNoteWorkspace: ObservableObject {
             hasUnsavedChanges = false
             try PackageBookmarkStore.save(
                 packageURL: destinationURL,
-                accessRootURL: destinationURL.deletingLastPathComponent()
+                accessRootURL: accessRootURL
             )
         } catch {
             document.title = oldTitle
